@@ -1,0 +1,48 @@
+
+This directory is intended for PlatformIO Test Runner and project tests.
+
+Unit Testing is a software testing method by which individual units of
+source code, sets of one or more MCU program modules together with associated
+control data, usage procedures, and operating procedures, are tested to
+determine whether they are fit for use. Unit testing finds problems early
+in the development cycle.
+
+More information about PlatformIO Unit Testing:
+- https://docs.platformio.org/en/latest/advanced/unit-testing/index.html
+
+---
+
+### Manual HID UART testing
+
+`ble_hid_uart_client.py` provides a quick way to talk to the ESP32 over the UART JSON protocol from a Raspberry Pi or any Linux host:
+
+```bash
+pip install pyserial
+python3 test/ble_hid_uart_client.py --port /dev/ttyUSB0 keyboard --text "Hello from Pi"
+```
+
+By default the client listens for about 1.5 seconds to show the firmware's `status`/`event` responses. Pass `--listen-for -1` if you want it to stay open until you press `Ctrl+C`.
+
+On Windows, use the `py` launcher and your COM port:
+
+```powershell
+py test\ble_hid_uart_client.py --port COM3 --listen-for 2 keyboard --text "Hello from Windows"
+```
+
+If you notice truncated text on the host, increase the inter-character delay (for example `--char-delay 10` adds 10 ms between keystrokes).
+
+### Full keyboard/mouse demo
+
+`hid_demo.py` reproduces the original combo example: it types a message, sends media keys, performs the Ctrl+Alt+Delete sequence, moves the pointer, scrolls, and exercises the mouse buttons.
+
+```powershell
+py test\hid_demo.py --port COM3
+```
+
+Optional flags let you adjust delays or print the planned sequence without sending (`--dry-run`). For smoother pointer motion try, for example: `--mouse-step 8 --mouse-step-delay 0.12`.
+
+---
+
+### Browser control panel
+
+Prefer a browser-based UI? Launch the FastAPI app under `web/server.py` (`uvicorn web.server:app --reload`) and open `http://127.0.0.1:8000/`. The page lets you connect to the UART port, send text, trigger combos, media keys, and mouse actions interactively. See `web/README.md` for details.
