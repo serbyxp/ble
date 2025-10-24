@@ -872,6 +872,7 @@
         Alt: "ALT",
         Shift: "SHIFT",
         Meta: "GUI",
+        " ": "SPACE",
         Enter: "ENTER",
         Tab: "TAB",
         Escape: "ESC",
@@ -896,7 +897,7 @@
       const heldModifiers = new Set();
 
       function translateKey(event) {
-        // Check if it's a special key
+        // Check if it's a special key (including space)
         if (keyMap[event.key]) {
           return keyMap[event.key];
         }
@@ -904,11 +905,6 @@
         // For printable characters, use event.key directly (it already has shift applied)
         if (event.key.length === 1) {
           return event.key;
-        }
-
-        // Handle space specially
-        if (event.key === " ") {
-          return "SPACE";
         }
 
         // Fallback for other keys
