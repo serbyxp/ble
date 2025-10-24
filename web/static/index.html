@@ -1,909 +1,990 @@
 <!DOCTYPE html>
 <html lang="en">
-  <head>
-    <meta charset="utf-8" />
-    <title>ESP32 BLE HID Control Panel</title>
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <style>
-      :root {
-        color-scheme: dark light;
-        font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
-        background: #0f121d;
-        color: #f5f7ff;
-      }
+
+<head>
+  <meta charset="utf-8" />
+  <title>ESP32 BLE HID Control Panel</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <style>
+    :root {
+      color-scheme: dark light;
+      font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+      background: #0f121d;
+      color: #f5f7ff;
+    }
+
+    body {
+      margin: 0;
+      padding: 16px;
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+      background: radial-gradient(circle at top, #202742, #0a0d16 65%);
+    }
+
+    h1 {
+      margin: 0;
+      text-align: center;
+      font-size: 1.7rem;
+      letter-spacing: 0.04em;
+    }
+
+    section {
+      background: rgba(20, 24, 36, 0.92);
+      border: 1px solid rgba(90, 130, 255, 0.28);
+      border-radius: 12px;
+      padding: 16px;
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+      box-shadow: 0 14px 36px rgba(6, 8, 18, 0.45);
+    }
+
+    fieldset {
+      border: 1px solid rgba(120, 150, 255, 0.22);
+      border-radius: 10px;
+      padding: 12px;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+
+    legend {
+      padding: 0 6px;
+      font-size: 0.95rem;
+      font-weight: 600;
+    }
+
+    label {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 0.92rem;
+    }
+
+    input[type="text"],
+    input[type="number"],
+    select,
+    textarea {
+      flex: 1;
+      min-width: 140px;
+      padding: 0.5rem 0.6rem;
+      border-radius: 8px;
+      border: 1px solid rgba(110, 145, 255, 0.3);
+      background: rgba(18, 22, 34, 0.96);
+      color: inherit;
+    }
+
+    textarea {
+      min-height: 120px;
+      resize: vertical;
+    }
+
+    input:focus,
+    textarea:focus,
+    select:focus {
+      outline: none;
+      border-color: rgba(150, 200, 255, 0.65);
+      box-shadow: 0 0 0 2px rgba(120, 180, 255, 0.25);
+    }
+
+    button {
+      padding: 0.5rem 0.75rem;
+      border-radius: 8px;
+      border: 1px solid rgba(110, 145, 255, 0.35);
+      background: linear-gradient(135deg, rgba(70, 110, 255, 0.9), rgba(90, 140, 255, 0.75));
+      color: #fdfefe;
+      font-weight: 600;
+      cursor: pointer;
+      transition: transform 0.12s ease, box-shadow 0.2s ease;
+    }
+
+    button:hover {
+      transform: translateY(-1px);
+      box-shadow: 0 12px 28px rgba(50, 80, 220, 0.35);
+    }
+
+    button.secondary {
+      background: rgba(70, 80, 110, 0.85);
+      border-color: rgba(120, 140, 200, 0.4);
+    }
+
+    button.active {
+      background: linear-gradient(135deg, rgba(100, 200, 80, 0.9), rgba(80, 180, 60, 0.85));
+      border-color: rgba(120, 220, 100, 0.5);
+    }
+
+    .grid {
+      display: grid;
+      gap: 0.6rem;
+    }
+
+    .grid.actions {
+      grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+    }
+
+    .grid.media {
+      grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+    }
+
+    .grid.mouse {
+      grid-template-columns: repeat(3, minmax(85px, 1fr));
+      justify-items: stretch;
+      align-items: center;
+    }
+
+    .log {
+      max-height: 260px;
+      overflow-y: auto;
+      padding: 0.85rem;
+      border-radius: 10px;
+      border: 1px solid rgba(120, 150, 255, 0.22);
+      background: rgba(16, 20, 32, 0.9);
+      font-family: ui-monospace, SFMono-Regular, Consolas, "Liberation Mono", monospace;
+      font-size: 0.84rem;
+      line-height: 1.35;
+    }
+
+    .log-entry {
+      display: grid;
+      grid-template-columns: auto auto 1fr;
+      gap: 0.4rem;
+      align-items: baseline;
+      padding: 0.2rem 0;
+    }
+
+    .log-entry .time {
+      opacity: 0.6;
+    }
+
+    .log-entry .direction {
+      width: 1.5rem;
+      text-align: center;
+      font-weight: 700;
+    }
+
+    .log-entry.send .direction {
+      color: #85a9ff;
+    }
+
+    .log-entry.recv .direction {
+      color: #6fe7c8;
+    }
+
+    .log-entry.info .direction {
+      color: #ffd479;
+    }
+
+    .log-entry.error .direction {
+      color: #ff7a8a;
+    }
+
+    .row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.75rem;
+    }
+
+    .row>* {
+      flex: 1 1 220px;
+    }
+
+    .status {
+      font-size: 0.9rem;
+      opacity: 0.82;
+    }
+
+    .status.error {
+      color: #ff9aa0;
+    }
+
+    small {
+      font-size: 0.82rem;
+      opacity: 0.7;
+    }
+
+    #viewer-container {
+      position: relative;
+      width: 100%;
+      overflow: hidden;
+      border-radius: 12px;
+      border: 1px solid rgba(120, 160, 255, 0.28);
+      background: #05060e;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+
+    #viewer-container.landscape {
+      aspect-ratio: 16 / 9;
+      max-height: 70vh;
+    }
+
+    #viewer-container.portrait {
+      aspect-ratio: 9 / 16;
+      max-height: 80vh;
+      max-width: 45vh;
+      margin: 0 auto;
+    }
+
+    #remote-video {
+      width: 100%;
+      height: 100%;
+      object-fit: contain;
+      display: block;
+    }
+
+    #viewer-overlay {
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      cursor: crosshair;
+      outline: none;
+      display: flex;
+      align-items: flex-end;
+      justify-content: flex-end;
+      padding: 0.45rem;
+      background: rgba(10, 12, 22, 0.12);
+    }
+
+    #viewer-overlay.inactive {
+      cursor: default;
+    }
+
+    #viewer-overlay.disabled {
+      cursor: not-allowed;
+      pointer-events: none;
+      background: rgba(10, 12, 22, 0.4);
+    }
+
+    #overlay-hint {
+      background: rgba(8, 12, 22, 0.75);
+      padding: 0.35rem 0.65rem;
+      border-radius: 6px;
+      font-size: 0.8rem;
+      transition: opacity 0.2s ease;
+      pointer-events: none;
+    }
+
+    #viewer-overlay.active #overlay-hint {
+      opacity: 0.35;
+    }
+
+    @media (max-width: 860px) {
       body {
-        margin: 0;
-        padding: 16px;
-        display: flex;
-        flex-direction: column;
-        gap: 16px;
-        background: radial-gradient(circle at top, #202742, #0a0d16 65%);
-      }
-      h1 {
-        margin: 0;
-        text-align: center;
-        font-size: 1.7rem;
-        letter-spacing: 0.04em;
-      }
-      section {
-        background: rgba(20, 24, 36, 0.92);
-        border: 1px solid rgba(90, 130, 255, 0.28);
-        border-radius: 12px;
-        padding: 16px;
-        display: flex;
-        flex-direction: column;
-        gap: 12px;
-        box-shadow: 0 14px 36px rgba(6, 8, 18, 0.45);
-      }
-      fieldset {
-        border: 1px solid rgba(120, 150, 255, 0.22);
-        border-radius: 10px;
         padding: 12px;
-        display: flex;
-        flex-direction: column;
-        gap: 10px;
       }
-      legend {
-        padding: 0 6px;
-        font-size: 0.95rem;
-        font-weight: 600;
+
+      section {
+        padding: 12px 14px;
       }
-      label {
-        display: flex;
-        align-items: center;
-        gap: 8px;
-        font-size: 0.92rem;
-      }
-      input[type="text"],
-      input[type="number"],
-      select,
-      textarea {
-        flex: 1;
-        min-width: 140px;
-        padding: 0.5rem 0.6rem;
-        border-radius: 8px;
-        border: 1px solid rgba(110, 145, 255, 0.3);
-        background: rgba(18, 22, 34, 0.96);
-        color: inherit;
-      }
-      textarea {
-        min-height: 120px;
-        resize: vertical;
-      }
-      input:focus,
-      textarea:focus,
-      select:focus {
-        outline: none;
-        border-color: rgba(150, 200, 255, 0.65);
-        box-shadow: 0 0 0 2px rgba(120, 180, 255, 0.25);
-      }
-      button {
-        padding: 0.5rem 0.75rem;
-        border-radius: 8px;
-        border: 1px solid rgba(110, 145, 255, 0.35);
-        background: linear-gradient(135deg, rgba(70, 110, 255, 0.9), rgba(90, 140, 255, 0.75));
-        color: #fdfefe;
-        font-weight: 600;
-        cursor: pointer;
-        transition: transform 0.12s ease, box-shadow 0.2s ease;
-      }
-      button:hover {
-        transform: translateY(-1px);
-        box-shadow: 0 12px 28px rgba(50, 80, 220, 0.35);
-      }
-      button.secondary {
-        background: rgba(70, 80, 110, 0.85);
-        border-color: rgba(120, 140, 200, 0.4);
-      }
-      button.danger {
-        background: rgba(180, 60, 90, 0.9);
-        border-color: rgba(220, 90, 130, 0.6);
-      }
-      .grid {
-        display: grid;
-        gap: 0.6rem;
-      }
-      .grid.actions {
-        grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
-      }
-      .grid.media {
-        grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
-      }
+
       .grid.mouse {
-        grid-template-columns: repeat(3, minmax(85px, 1fr));
-        justify-items: stretch;
-        align-items: center;
+        grid-template-columns: repeat(3, minmax(70px, 1fr));
       }
-      .log {
-        max-height: 260px;
-        overflow-y: auto;
-        padding: 0.85rem;
-        border-radius: 10px;
-        border: 1px solid rgba(120, 150, 255, 0.22);
-        background: rgba(16, 20, 32, 0.9);
-        font-family: ui-monospace, SFMono-Regular, Consolas, "Liberation Mono", monospace;
-        font-size: 0.84rem;
-        line-height: 1.35;
-      }
-      .log-entry {
-        display: grid;
-        grid-template-columns: auto auto 1fr;
-        gap: 0.4rem;
-        align-items: baseline;
-        padding: 0.2rem 0;
-      }
-      .log-entry .time {
-        opacity: 0.6;
-      }
-      .log-entry .direction {
-        width: 1.5rem;
-        text-align: center;
-        font-weight: 700;
-      }
-      .log-entry.send .direction {
-        color: #85a9ff;
-      }
-      .log-entry.recv .direction {
-        color: #6fe7c8;
-      }
-      .log-entry.info .direction {
-        color: #ffd479;
-      }
-      .log-entry.error .direction {
-        color: #ff7a8a;
-      }
-      .row {
-        display: flex;
-        flex-wrap: wrap;
-        gap: 0.75rem;
-      }
-      .row > * {
-        flex: 1 1 220px;
-      }
-      .status {
-        font-size: 0.9rem;
-        opacity: 0.82;
-      }
-      .status.error {
-        color: #ff9aa0;
-      }
-      small {
-        font-size: 0.82rem;
-        opacity: 0.7;
-      }
-      #viewer-container {
-        position: relative;
-        width: 100%;
-        max-height: 60vh;
-        aspect-ratio: 16 / 9;
-        overflow: hidden;
-        border-radius: 12px;
-        border: 1px solid rgba(120, 160, 255, 0.28);
-        background: #05060e;
-      }
-      #viewer-container.portrait {
-        aspect-ratio: 9 / 16;
-      }
-      #viewer-container video,
-      #viewer-overlay {
-        position: absolute;
-        top: 50%;
-        left: 50%;
-        width: 100%;
-        height: 100%;
-        transform: translate(-50%, -50%);
-        object-fit: contain;
-      }
-      #viewer-container.portrait video,
-      #viewer-container.portrait #viewer-overlay {
-        transform: translate(-50%, -50%) rotate(90deg);
-      }
-      #viewer-overlay {
-        cursor: crosshair;
-        outline: none;
-        display: flex;
-        align-items: flex-end;
-        justify-content: flex-end;
-        padding: 0.45rem;
-        background: rgba(10, 12, 22, 0.12);
-      }
-      #viewer-overlay.inactive {
-        cursor: default;
-      }
-      #viewer-overlay.disabled {
-        cursor: not-allowed;
-        pointer-events: none;
-        background: rgba(10, 12, 22, 0.4);
-      }
-      #overlay-hint {
-        background: rgba(8, 12, 22, 0.65);
-        padding: 0.35rem 0.65rem;
-        border-radius: 6px;
-        font-size: 0.8rem;
-        transition: opacity 0.2s ease;
-      }
-      #viewer-overlay.active #overlay-hint {
-        opacity: 0.35;
-      }
-      @media (max-width: 860px) {
-        body {
-          padding: 12px;
-        }
-        section {
-          padding: 12px 14px;
-        }
-        .grid.mouse {
-          grid-template-columns: repeat(3, minmax(70px, 1fr));
-        }
-        button {
-          font-size: 0.85rem;
-        }
-      }
-    </style>
-  </head>
-  <body>
-    <h1>ESP32 BLE HID Control Panel</h1>
 
-    <section>
-      <form id="connection-form" class="row">
-        <label>Serial Port <input type="text" id="port-input" placeholder="COM3 or /dev/ttyUSB0" /></label>
+      button {
+        font-size: 0.85rem;
+      }
+    }
+  </style>
+</head>
+
+<body>
+  <h1>ESP32 BLE HID Control Panel</h1>
+
+  <section>
+    <form id="connection-form" class="row">
+      <label>Serial Port <input type="text" id="port-input" placeholder="COM3 or /dev/ttyUSB0" /></label>
+      <label>
+        Baud
+        <select id="baud-input">
+          <option value="115200" selected>115200</option>
+          <option value="230400">230400</option>
+          <option value="460800">460800</option>
+        </select>
+      </label>
+      <button type="submit">Connect</button>
+    </form>
+    <div class="status" id="connection-status">Not connected. Configure the serial port then click Connect.</div>
+  </section>
+
+  <section>
+    <fieldset>
+      <legend>Remote Viewer</legend>
+      <div class="row">
+        <label>Video Stream URL <input type="text" id="video-url-input"
+            placeholder="http://192.168.1.100:7100/stream.mjpg" /></label>
+        <button type="button" id="video-load-button">Load Stream</button>
+      </div>
+      <div id="viewer-container" class="landscape">
+        <video id="remote-video" autoplay muted playsinline></video>
+        <div id="viewer-overlay" class="inactive disabled" tabindex="0">
+          <div id="overlay-hint">Control disabled</div>
+        </div>
+      </div>
+      <div class="row">
+        <button type="button" id="capture-toggle" class="secondary">Start Capture</button>
+        <button type="button" class="secondary" id="pointer-lock-toggle">Enable Pointer Lock</button>
+        <button type="button" class="secondary" id="overlay-release">Release All</button>
+        <button type="button" class="secondary" id="orientation-toggle">Orientation: Auto</button>
         <label>
-          Baud
-          <select id="baud-input">
-            <option value="9600">9600</option>
-            <option value="19200">19200</option>
-            <option value="38400">38400</option>
-            <option value="57600">57600</option>
-            <option value="115200" selected>115200</option>
-            <option value="230400">230400</option>
-            <option value="460800">460800</option>
-          </select>
+          Sensitivity
+          <input type="number" id="overlay-sensitivity" value="1.0" min="0.1" max="10" step="0.1" />
         </label>
-        <label>Listen window (s) <input type="number" id="listen-input" value="0.5" min="0" max="5" step="0.05" /></label>
-        <button type="submit">Connect</button>
-      </form>
-      <div class="status" id="connection-status">Not connected. Configure the serial port then click Connect.</div>
-    </section>
+      </div>
+      <small>
+        UxPlay streams at 1920x1080 (landscape) or 1080x1920 (portrait). Enter stream URL and click "Load Stream".
+        Use "Start Capture" then click overlay to enable pointer lock for best mouse response.
+      </small>
+    </fieldset>
+  </section>
 
-    <section>
-      <fieldset>
-        <legend>Remote Viewer</legend>
-        <div id="viewer-container" class="landscape">
-          <video id="remote-video" autoplay muted playsinline></video>
-          <div id="viewer-overlay" class="inactive disabled" tabindex="0">
-            <div id="overlay-hint">Control disabled</div>
-          </div>
-        </div>
-        <div class="row">
-          <label><input type="checkbox" id="overlay-enable" checked /> Enable capture</label>
-          <button type="button" class="secondary" id="overlay-release">Release Control</button>
-          <button type="button" class="secondary" id="orientation-toggle">Orientation: Landscape</button>
-          <label>
-            Sensitivity
-            <input type="number" id="overlay-sensitivity" value="1.4" min="0.2" max="5" step="0.1" />
-          </label>
-        </div>
-        <small>
-          Attach your GStreamer/uxplayer feed to the <code>#remote-video</code> element. While capture is enabled and the pointer
-          stays inside the frame, keyboard and mouse input is forwarded to the ESP32.
-        </small>
-      </fieldset>
-    </section>
+  <section>
+    <fieldset>
+      <legend>Keyboard Text Output</legend>
+      <textarea id="text-input" placeholder="Type text to send..."></textarea>
+      <div class="row">
+        <label><input type="checkbox" id="text-newline" checked /> Append newline</label>
+        <label>Character delay (ms) <input type="number" id="text-delay" value="6" min="0" max="1000" /></label>
+        <button type="button" id="text-send">Send Text</button>
+      </div>
+    </fieldset>
 
-    <section>
-      <fieldset>
-        <legend>Keyboard Text Output</legend>
-        <textarea id="text-input" placeholder="Type text to send..."></textarea>
-        <div class="row">
-          <label><input type="checkbox" id="text-newline" checked /> Append newline</label>
-          <label>Character delay (ms) <input type="number" id="text-delay" value="6" min="0" max="1000" /></label>
-          <label>Repeat <input type="number" id="text-repeat" value="1" min="1" max="10" /></label>
-          <button type="button" id="text-send">Send Text</button>
-        </div>
-      </fieldset>
+    <fieldset>
+      <legend>Quick Key Combos</legend>
+      <div class="grid actions" id="combo-buttons">
+        <button type="button" data-keys="ENTER" data-hold="40">Enter</button>
+        <button type="button" data-keys="CTRL,ALT,DELETE" data-hold="150">Ctrl + Alt + Delete</button>
+        <button type="button" data-keys="CTRL,C" data-hold="60">Copy (Ctrl+C)</button>
+        <button type="button" data-keys="CTRL,V" data-hold="60">Paste (Ctrl+V)</button>
+        <button type="button" data-keys="CTRL,Z" data-hold="60">Undo (Ctrl+Z)</button>
+        <button type="button" data-keys="ALT,TAB" data-hold="200">Alt + Tab</button>
+      </div>
+    </fieldset>
 
-      <fieldset>
-        <legend>Quick Key Combos</legend>
-        <div class="grid actions" id="combo-buttons">
-          <button type="button" data-keys="ENTER" data-hold="40">Enter</button>
-          <button type="button" data-keys="CTRL,ALT,DELETE" data-hold="150">Ctrl + Alt + Delete</button>
-          <button type="button" data-keys="CTRL,C" data-hold="60">Copy (Ctrl+C)</button>
-          <button type="button" data-keys="CTRL,V" data-hold="60">Paste (Ctrl+V)</button>
-          <button type="button" data-keys="CTRL,Z" data-hold="60">Undo (Ctrl+Z)</button>
-          <button type="button" data-keys="ALT,TAB" data-hold="200">Alt + Tab</button>
-        </div>
-      </fieldset>
+    <fieldset>
+      <legend>Media Keys</legend>
+      <div class="grid media" id="media-buttons">
+        <button type="button" data-key="KEY_MEDIA_PLAY_PAUSE">Play / Pause</button>
+        <button type="button" data-key="KEY_MEDIA_STOP">Stop</button>
+        <button type="button" data-key="KEY_MEDIA_PREVIOUS_TRACK">Previous</button>
+        <button type="button" data-key="KEY_MEDIA_NEXT_TRACK">Next</button>
+        <button type="button" data-key="KEY_MEDIA_VOLUME_DOWN">Volume -</button>
+        <button type="button" data-key="KEY_MEDIA_VOLUME_UP">Volume +</button>
+        <button type="button" data-key="KEY_MEDIA_MUTE">Mute</button>
+      </div>
+    </fieldset>
+  </section>
 
-      <fieldset>
-        <legend>Media Keys</legend>
-        <div class="grid media" id="media-buttons">
-          <button type="button" data-key="KEY_MEDIA_PLAY_PAUSE">Play / Pause</button>
-          <button type="button" data-key="KEY_MEDIA_STOP">Stop</button>
-          <button type="button" data-key="KEY_MEDIA_PREVIOUS_TRACK">Previous</button>
-          <button type="button" data-key="KEY_MEDIA_NEXT_TRACK">Next</button>
-          <button type="button" data-key="KEY_MEDIA_VOLUME_DOWN">Volume -</button>
-          <button type="button" data-key="KEY_MEDIA_VOLUME_UP">Volume +</button>
-          <button type="button" data-key="KEY_MEDIA_MUTE">Mute</button>
-        </div>
-      </fieldset>
-    </section>
+  <section>
+    <fieldset>
+      <legend>Mouse Controls</legend>
+      <div class="row">
+        <label>Step (px) <input type="number" id="mouse-step" value="25" min="1" max="200" /></label>
+        <label>Scroll step <input type="number" id="scroll-step" value="2" min="1" max="50" /></label>
+      </div>
+      <div class="grid mouse" id="move-buttons">
+        <span></span><button type="button" data-dx="0" data-dy="-1">▲</button><span></span>
+        <button type="button" data-dx="-1" data-dy="-1">◄▲</button>
+        <button type="button" data-wheel="1" class="secondary">Scroll ▲</button>
+        <button type="button" data-dx="1" data-dy="-1">▲►</button>
+        <button type="button" data-dx="-1" data-dy="0">◄</button>
+        <button type="button" data-pan="-1" class="secondary">Pan ◄</button>
+        <button type="button" data-dx="1" data-dy="0">►</button>
+        <button type="button" data-dx="-1" data-dy="1">◄▼</button>
+        <button type="button" data-dx="0" data-dy="1">▼</button>
+        <button type="button" data-dx="1" data-dy="1">▼►</button>
+      </div>
+      <div class="grid actions" id="click-buttons">
+        <button type="button" data-action="click" data-buttons="left">Left Click</button>
+        <button type="button" data-action="click" data-buttons="right">Right Click</button>
+        <button type="button" data-action="click" data-buttons="middle">Middle Click</button>
+        <button type="button" data-action="press" data-buttons="left">Press Left</button>
+        <button type="button" data-action="release" data-buttons="left">Release Left</button>
+        <button type="button" data-action="releaseAll" class="secondary">Release All Buttons</button>
+      </div>
+    </fieldset>
+  </section>
 
-    <section>
-      <fieldset>
-        <legend>Mouse Controls</legend>
-        <div class="row">
-          <label>Step (px) <input type="number" id="mouse-step" value="25" min="1" max="200" /></label>
-          <label>Scroll step <input type="number" id="scroll-step" value="2" min="1" max="50" /></label>
-          <label>Listen window (s) <input type="number" id="mouse-listen" value="0.2" min="0" max="2" step="0.05" /></label>
-        </div>
-        <div class="grid mouse" id="move-buttons">
-          <span></span><button type="button" data-dx="0" data-dy="-1">▲</button><span></span>
-          <button type="button" data-dx="-1" data-dy="-1">◄▲</button>
-          <button type="button" data-wheel="1" class="secondary">Scroll ▲</button>
-          <button type="button" data-dx="1" data-dy="-1">▲►</button>
-          <button type="button" data-dx="-1" data-dy="0">◄</button>
-          <button type="button" data-pan="-1" class="secondary">Pan ◄</button>
-          <button type="button" data-dx="1" data-dy="0">►</button>
-          <button type="button" data-dx="-1" data-dy="1">◄▼</button>
-          <button type="button" data-dx="0" data-dy="1">▼</button>
-          <button type="button" data-dx="1" data-dy="1">▼►</button>
-        </div>
-        <div class="grid actions" id="click-buttons">
-          <button type="button" data-action="click" data-buttons="left">Left Click</button>
-          <button type="button" data-action="click" data-buttons="right">Right Click</button>
-          <button type="button" data-action="click" data-buttons="middle">Middle Click</button>
-          <button type="button" data-action="click" data-buttons="back">Back</button>
-          <button type="button" data-action="click" data-buttons="forward">Forward</button>
-          <button type="button" data-action="click" data-buttons="left,right">Left + Right</button>
-          <button type="button" data-action="press" data-buttons="left">Press Left</button>
-          <button type="button" data-action="release" data-buttons="left">Release Left</button>
-          <button type="button" data-action="releaseAll" class="secondary">Release All Buttons</button>
-        </div>
-      </fieldset>
-    </section>
+  <section>
+    <fieldset>
+      <legend>Command Log</legend>
+      <div id="log" class="log"></div>
+      <div class="row">
+        <button type="button" class="secondary" id="log-clear">Clear Log</button>
+        <label><input type="checkbox" id="log-mouse-moves" /> Log mouse moves</label>
+      </div>
+    </fieldset>
+  </section>
 
-    <section>
-      <fieldset>
-        <legend>Command Log</legend>
-        <div id="log" class="log"></div>
-        <div class="row">
-          <button type="button" class="secondary" id="log-clear">Clear Log</button>
-        </div>
-      </fieldset>
-    </section>
+  <script>
+    (() => {
+      const connectionForm = document.getElementById("connection-form");
+      const portInput = document.getElementById("port-input");
+      const baudInput = document.getElementById("baud-input");
+      const connectionStatus = document.getElementById("connection-status");
+      const videoUrlInput = document.getElementById("video-url-input");
+      const videoLoadButton = document.getElementById("video-load-button");
+      const remoteVideo = document.getElementById("remote-video");
+      const textInput = document.getElementById("text-input");
+      const textNewline = document.getElementById("text-newline");
+      const textDelay = document.getElementById("text-delay");
+      const textSendButton = document.getElementById("text-send");
+      const comboButtons = document.getElementById("combo-buttons");
+      const mediaButtons = document.getElementById("media-buttons");
+      const moveButtons = document.getElementById("move-buttons");
+      const clickButtons = document.getElementById("click-buttons");
+      const mouseStep = document.getElementById("mouse-step");
+      const scrollStep = document.getElementById("scroll-step");
+      const logContainer = document.getElementById("log");
+      const logClear = document.getElementById("log-clear");
+      const logMouseMoves = document.getElementById("log-mouse-moves");
+      const captureToggle = document.getElementById("capture-toggle");
+      const pointerLockToggle = document.getElementById("pointer-lock-toggle");
+      const overlayRelease = document.getElementById("overlay-release");
+      const orientationToggle = document.getElementById("orientation-toggle");
+      const overlaySensitivity = document.getElementById("overlay-sensitivity");
+      const viewerContainer = document.getElementById("viewer-container");
+      const overlay = document.getElementById("viewer-overlay");
+      const overlayHint = document.getElementById("overlay-hint");
 
-    <script>
-      (() => {
-        const connectionForm = document.getElementById("connection-form");
-        const portInput = document.getElementById("port-input");
-        const baudInput = document.getElementById("baud-input");
-        const listenInput = document.getElementById("listen-input");
-        const connectionStatus = document.getElementById("connection-status");
-        const textInput = document.getElementById("text-input");
-        const textNewline = document.getElementById("text-newline");
-        const textDelay = document.getElementById("text-delay");
-        const textRepeat = document.getElementById("text-repeat");
-        const textSendButton = document.getElementById("text-send");
-        const comboButtons = document.getElementById("combo-buttons");
-        const mediaButtons = document.getElementById("media-buttons");
-        const moveButtons = document.getElementById("move-buttons");
-        const clickButtons = document.getElementById("click-buttons");
-        const mouseStep = document.getElementById("mouse-step");
-        const scrollStep = document.getElementById("scroll-step");
-        const mouseListen = document.getElementById("mouse-listen");
-        const logContainer = document.getElementById("log");
-        const logClear = document.getElementById("log-clear");
-        const overlayEnable = document.getElementById("overlay-enable");
-        const overlayRelease = document.getElementById("overlay-release");
-        const orientationToggle = document.getElementById("orientation-toggle");
-        const overlaySensitivity = document.getElementById("overlay-sensitivity");
-        const viewerContainer = document.getElementById("viewer-container");
-        const overlay = document.getElementById("viewer-overlay");
-        const overlayHint = document.getElementById("overlay-hint");
+      let websocket = null;
+      let wsRequestId = 0;
+      let captureEnabled = false;
+      let pointerLockEnabled = false;
+      let orientationMode = "auto";
+      let videoPlaying = false;
 
-        let websocket = null;
-        let wsRequestId = 0;
-        let lastPointerEvent = 0;
+      const mouseButtonMap = ["left", "middle", "right", "back", "forward"];
 
-        const mouseButtonMap = ["left", "middle", "right", "back", "forward"];
+      const formatTime = () => new Date().toLocaleTimeString();
 
-        const formatTime = () => new Date().toLocaleTimeString();
+      function appendLog(direction, message, type = "info") {
+        if (!logContainer) return;
+        const entry = document.createElement("div");
+        entry.className = `log-entry ${type}`;
+        const time = document.createElement("span");
+        time.className = "time";
+        time.textContent = formatTime();
+        const dir = document.createElement("span");
+        dir.className = "direction";
+        dir.textContent = direction;
+        const body = document.createElement("pre");
+        body.textContent = message;
+        body.style.margin = "0";
+        body.style.whiteSpace = "pre-wrap";
+        entry.append(time, dir, body);
+        logContainer.append(entry);
+        logContainer.scrollTop = logContainer.scrollHeight;
+      }
 
-        function appendLog(direction, message, type = "info") {
-          if (!logContainer) {
-            return;
-          }
-          const entry = document.createElement("div");
-          entry.className = `log-entry ${type}`;
-          const time = document.createElement("span");
-          time.className = "time";
-          time.textContent = formatTime();
-          const dir = document.createElement("span");
-          dir.className = "direction";
-          dir.textContent = direction;
-          const body = document.createElement("pre");
-          body.textContent = message;
-          body.style.margin = "0";
-          body.style.whiteSpace = "pre-wrap";
-          entry.append(time, dir, body);
-          logContainer.append(entry);
-          logContainer.scrollTop = logContainer.scrollHeight;
+      function logSend(message) { appendLog("→", message, "send"); }
+      function logRecv(message) { appendLog("←", message, "recv"); }
+      function logInfo(message) { appendLog("i", message, "info"); }
+      function logError(message) { appendLog("!", message, "error"); }
+
+      function setStatus(text, isError = false) {
+        connectionStatus.textContent = text;
+        connectionStatus.classList.toggle("error", isError);
+      }
+
+      async function apiGet(path) {
+        const response = await fetch(path, { headers: { Accept: "application/json" } });
+        if (!response.ok) {
+          const text = await response.text();
+          throw new Error(text || `${response.status} ${response.statusText}`);
         }
+        return response.json();
+      }
 
-        function logSend(message) {
-          appendLog("→", message, "send");
-        }
-
-        function logRecv(message) {
-          appendLog("←", message, "recv");
-        }
-
-        function logInfo(message) {
-          appendLog("i", message, "info");
-        }
-
-        function logError(message) {
-          appendLog("!", message, "error");
-        }
-
-        function setStatus(text, isError = false) {
-          connectionStatus.textContent = text;
-          connectionStatus.classList.toggle("error", isError);
-        }
-
-        function getListenSeconds() {
-          const value = parseFloat(listenInput.value);
-          return Number.isFinite(value) && value >= 0 ? value : 0;
-        }
-
-        async function apiGet(path) {
-          const response = await fetch(path, { headers: { Accept: "application/json" } });
-          if (!response.ok) {
-            const text = await response.text();
-            throw new Error(text || `${response.status} ${response.statusText}`);
-          }
-          return response.json();
-        }
-
-        async function apiPost(path, payload) {
-          const response = await fetch(path, {
-            method: "POST",
-            headers: {
-              "Content-Type": "application/json",
-              Accept: "application/json",
-            },
-            body: JSON.stringify(payload),
-          });
-          if (!response.ok) {
-            const text = await response.text();
-            throw new Error(text || `${response.status} ${response.statusText}`);
-          }
-          return response.json();
-        }
-
-        function withListen(payload, listenOverride) {
-          const listen = listenOverride ?? getListenSeconds();
-          if (listen > 0) {
-            return { ...payload, listen };
-          }
-          return { ...payload, listen: 0 };
-        }
-
-        async function sendText() {
-          const text = textInput.value;
-          if (!text) {
-            logInfo("Nothing to send – textarea is empty");
-            return;
-          }
-          const payload = withListen(
-            {
-              text,
-              newline: Boolean(textNewline.checked),
-              charDelayMs: Number.parseInt(textDelay.value, 10) || 0,
-              repeat: Number.parseInt(textRepeat.value, 10) || 1,
-            },
-            undefined
-          );
-          logSend(`POST /api/text\n${JSON.stringify(payload, null, 2)}`);
-          try {
-            const data = await apiPost("/api/text", payload);
-            logRecv(JSON.stringify(data, null, 2));
-          } catch (err) {
-            logError(err instanceof Error ? err.message : String(err));
-          }
-        }
-
-        async function sendKeyboard(action, extra = {}) {
-          const payload = withListen({ action, ...extra }, undefined);
-          logSend(`POST /api/keyboard\n${JSON.stringify(payload, null, 2)}`);
-          try {
-            const data = await apiPost("/api/keyboard", payload);
-            logRecv(JSON.stringify(data, null, 2));
-          } catch (err) {
-            logError(err instanceof Error ? err.message : String(err));
-          }
-        }
-
-        async function sendMedia(key) {
-          const payload = withListen({ key }, undefined);
-          logSend(`POST /api/media\n${JSON.stringify(payload, null, 2)}`);
-          try {
-            const data = await apiPost("/api/media", payload);
-            logRecv(JSON.stringify(data, null, 2));
-          } catch (err) {
-            logError(err instanceof Error ? err.message : String(err));
-          }
-        }
-
-        async function sendMouse(payload, listenOverride) {
-          const requestPayload = withListen(payload, listenOverride);
-          logSend(`POST /api/mouse\n${JSON.stringify(requestPayload, null, 2)}`);
-          try {
-            const data = await apiPost("/api/mouse", requestPayload);
-            logRecv(JSON.stringify(data, null, 2));
-          } catch (err) {
-            logError(err instanceof Error ? err.message : String(err));
-          }
-        }
-
-        function ensureWebsocket() {
-          if (websocket && (websocket.readyState === WebSocket.OPEN || websocket.readyState === WebSocket.CONNECTING)) {
-            return;
-          }
-          const scheme = window.location.protocol === "https:" ? "wss" : "ws";
-          websocket = new WebSocket(`${scheme}://${window.location.host}/ws/hid`);
-
-          websocket.addEventListener("open", () => {
-            logInfo("WebSocket connected");
-            updateOverlayState();
-          });
-
-          websocket.addEventListener("message", (event) => {
-            try {
-              const data = JSON.parse(event.data);
-              if (data.status === "error") {
-                logError(JSON.stringify(data, null, 2));
-              } else {
-                logRecv(JSON.stringify(data, null, 2));
-              }
-            } catch (err) {
-              logRecv(event.data);
-            }
-          });
-
-          websocket.addEventListener("close", () => {
-            logInfo("WebSocket disconnected");
-            updateOverlayState();
-            setTimeout(ensureWebsocket, 1500);
-          });
-
-          websocket.addEventListener("error", (event) => {
-            logError(`WebSocket error: ${event instanceof ErrorEvent ? event.message : "unknown"}`);
-          });
-        }
-
-        function sendWs(type, payload, { listen, log = true } = {}) {
-          if (!websocket || websocket.readyState !== WebSocket.OPEN) {
-            return;
-          }
-          const message = {
-            type,
-            requestId: ++wsRequestId,
-            ...payload,
-            listen: listen ?? getListenSeconds(),
-          };
-          if (log) {
-            logSend(`WS /ws/hid\n${JSON.stringify(message, null, 2)}`);
-          }
-          websocket.send(JSON.stringify(message));
-        }
-
-        function updateOverlayHint() {
-          if (overlay.classList.contains("disabled")) {
-            overlayHint.textContent = "Control disabled";
-          } else if (document.pointerLockElement === overlay) {
-            overlayHint.textContent = "Captured – press Esc to release";
-          } else {
-            overlayHint.textContent = "Click to capture";
-          }
-        }
-
-        function updateOverlayState() {
-          const enabled = overlayEnable.checked && websocket && websocket.readyState === WebSocket.OPEN;
-          overlay.classList.toggle("disabled", !enabled);
-          overlay.classList.toggle("inactive", !enabled || document.pointerLockElement !== overlay);
-          updateOverlayHint();
-        }
-
-        function pointerButtonName(event) {
-          const index = event.button;
-          return mouseButtonMap[index] || "left";
-        }
-
-        connectionForm.addEventListener("submit", async (event) => {
-          event.preventDefault();
-          const payload = {
-            port: portInput.value.trim(),
-            baud: Number.parseInt(baudInput.value, 10) || 115200,
-          };
-          logSend(`POST /api/config\n${JSON.stringify(payload, null, 2)}`);
-          try {
-            const data = await apiPost("/api/config", payload);
-            setStatus(`Connected to ${data.port} @ ${data.baud} baud`);
-            logRecv(JSON.stringify(data, null, 2));
-          } catch (err) {
-            const message = err instanceof Error ? err.message : String(err);
-            setStatus(message, true);
-            logError(message);
-          }
+      async function apiPost(path, payload) {
+        const response = await fetch(path, {
+          method: "POST",
+          headers: { "Content-Type": "application/json", Accept: "application/json" },
+          body: JSON.stringify(payload),
         });
+        if (!response.ok) {
+          const text = await response.text();
+          throw new Error(text || `${response.status} ${response.statusText}`);
+        }
+        return response.json();
+      }
 
-        textSendButton.addEventListener("click", sendText);
-        textInput.addEventListener("keydown", (event) => {
-          if ((event.ctrlKey || event.metaKey) && event.key === "Enter") {
-            event.preventDefault();
-            sendText();
-          }
-        });
-
-        comboButtons.addEventListener("click", (event) => {
-          const button = event.target.closest("button[data-keys]");
-          if (!button) {
-            return;
-          }
-          const keys = button.dataset.keys.split(",").map((key) => key.trim()).filter(Boolean);
-          const hold = Number.parseInt(button.dataset.hold || "80", 10) || 80;
-          sendKeyboard("tap", { keys, holdMs: hold });
-        });
-
-        mediaButtons.addEventListener("click", (event) => {
-          const button = event.target.closest("button[data-key]");
-          if (!button) {
-            return;
-          }
-          sendMedia(button.dataset.key);
-        });
-
-        moveButtons.addEventListener("click", (event) => {
-          const button = event.target.closest("button");
-          if (!button) {
-            return;
-          }
-          const dx = Number.parseInt(button.dataset.dx || "0", 10) * (Number.parseInt(mouseStep.value, 10) || 0);
-          const dy = Number.parseInt(button.dataset.dy || "0", 10) * (Number.parseInt(mouseStep.value, 10) || 0);
-          const wheel = Number.parseInt(button.dataset.wheel || "0", 10) * (Number.parseInt(scrollStep.value, 10) || 0);
-          const pan = Number.parseInt(button.dataset.pan || "0", 10) * (Number.parseInt(scrollStep.value, 10) || 0);
-          if (dx === 0 && dy === 0 && wheel === 0 && pan === 0) {
-            return;
-          }
-          sendMouse({ action: "move", dx, dy, wheel, pan }, parseFloat(mouseListen.value) || 0);
-        });
-
-        clickButtons.addEventListener("click", (event) => {
-          const button = event.target.closest("button");
-          if (!button) {
-            return;
-          }
-          const action = button.dataset.action || "click";
-          if (action === "releaseAll" || action === "release_all") {
-            sendMouse({ action: "releaseAll" }, parseFloat(mouseListen.value) || 0);
-            return;
-          }
-          const buttons = (button.dataset.buttons || "left")
-            .split(",")
-            .map((value) => value.trim())
-            .filter(Boolean);
-          sendMouse({ action, buttons }, parseFloat(mouseListen.value) || 0);
-        });
-
-        logClear.addEventListener("click", () => {
-          logContainer.innerHTML = "";
-        });
-
-        overlayEnable.addEventListener("change", updateOverlayState);
-        overlayRelease.addEventListener("click", () => {
-          if (document.pointerLockElement === overlay) {
-            document.exitPointerLock();
-          }
-        });
-        orientationToggle.addEventListener("click", () => {
-          viewerContainer.classList.toggle("portrait");
-          orientationToggle.textContent = viewerContainer.classList.contains("portrait")
-            ? "Orientation: Portrait"
-            : "Orientation: Landscape";
-        });
-
-        overlay.addEventListener("click", () => {
-          if (overlay.classList.contains("disabled")) {
-            return;
-          }
-          overlay.requestPointerLock();
-        });
-
-        document.addEventListener("pointerlockchange", () => {
-          overlay.classList.toggle("inactive", document.pointerLockElement !== overlay);
-          updateOverlayHint();
-        });
-
-        overlay.addEventListener("mousemove", (event) => {
-          if (document.pointerLockElement !== overlay) {
-            return;
-          }
-          const now = performance.now();
-          if (now - lastPointerEvent < 8) {
-            return;
-          }
-          lastPointerEvent = now;
-          const sensitivity = Number.parseFloat(overlaySensitivity.value) || 1;
-          const dx = Math.round(event.movementX * sensitivity);
-          const dy = Math.round(event.movementY * sensitivity);
-          if (dx === 0 && dy === 0) {
-            return;
-          }
-          sendWs(
-            "mouse_move",
-            { dx, dy },
-            { listen: parseFloat(mouseListen.value) || 0, log: false }
-          );
-        });
-
-        overlay.addEventListener("wheel", (event) => {
-          if (document.pointerLockElement !== overlay) {
-            return;
-          }
-          event.preventDefault();
-          const amount = Number.parseInt(scrollStep.value, 10) || 1;
-          const wheel = Math.sign(event.deltaY) * amount;
-          const pan = Math.sign(event.deltaX) * amount;
-          if (wheel === 0 && pan === 0) {
-            return;
-          }
-          sendWs(
-            "mouse_move",
-            { wheel, pan },
-            { listen: parseFloat(mouseListen.value) || 0, log: false }
-          );
-        });
-
-        overlay.addEventListener("mousedown", (event) => {
-          if (overlay.classList.contains("disabled")) {
-            return;
-          }
-          if (document.pointerLockElement !== overlay) {
-            overlay.requestPointerLock();
-          }
-          const buttonName = pointerButtonName(event);
-          sendWs(
-            "mouse_press",
-            { buttons: [buttonName] },
-            { listen: parseFloat(mouseListen.value) || 0, log: false }
-          );
-        });
-
-        overlay.addEventListener("mouseup", (event) => {
-          if (overlay.classList.contains("disabled")) {
-            return;
-          }
-          const buttonName = pointerButtonName(event);
-          sendWs(
-            "mouse_release",
-            { buttons: [buttonName] },
-            { listen: parseFloat(mouseListen.value) || 0, log: false }
-          );
-        });
-
-        overlay.addEventListener("contextmenu", (event) => {
-          event.preventDefault();
-        });
-
-        const keyMap = {
-          Control: "CTRL",
-          Alt: "ALT",
-          Shift: "SHIFT",
-          Meta: "GUI",
-          " ": "SPACE",
-          Enter: "ENTER",
-          Tab: "TAB",
-          Escape: "ESC",
-          ArrowUp: "UP",
-          ArrowDown: "DOWN",
-          ArrowLeft: "LEFT",
-          ArrowRight: "RIGHT",
-          Backspace: "BACKSPACE",
-          Delete: "DELETE",
-          Home: "HOME",
-          End: "END",
-          PageUp: "PAGE_UP",
-          PageDown: "PAGE_DOWN",
-          Insert: "INSERT",
-          CapsLock: "CAPS_LOCK",
-          F1: "F1",
-          F2: "F2",
-          F3: "F3",
-          F4: "F4",
-          F5: "F5",
-          F6: "F6",
-          F7: "F7",
-          F8: "F8",
-          F9: "F9",
-          F10: "F10",
-          F11: "F11",
-          F12: "F12",
+      async function sendText() {
+        const text = textInput.value;
+        if (!text) {
+          logInfo("Nothing to send – textarea is empty");
+          return;
+        }
+        const payload = {
+          text,
+          newline: Boolean(textNewline.checked),
+          charDelayMs: Number.parseInt(textDelay.value, 10) || 0,
+          listen: 0.5
         };
-
-        function translateKey(event) {
-          if (keyMap[event.key]) {
-            return keyMap[event.key];
-          }
-          if (event.key.length === 1) {
-            if (event.key.match(/[a-zA-Z]/)) {
-              return event.key.toUpperCase();
-            }
-            return event.key;
-          }
-          if (event.code && event.code.startsWith("Key")) {
-            return event.code.slice(3).toUpperCase();
-          }
-          if (event.code && event.code.startsWith("Digit")) {
-            return event.code.slice(5);
-          }
-          return event.key.toUpperCase();
+        logSend(`POST /api/text\n${JSON.stringify(payload, null, 2)}`);
+        try {
+          const data = await apiPost("/api/text", payload);
+          logRecv(JSON.stringify(data, null, 2));
+        } catch (err) {
+          logError(err instanceof Error ? err.message : String(err));
         }
+      }
 
-        overlay.addEventListener("keydown", (event) => {
-          if (overlay.classList.contains("disabled")) {
-            return;
-          }
-          if (event.repeat) {
-            event.preventDefault();
-            return;
-          }
-          const key = translateKey(event);
-          if (!key) {
-            return;
-          }
-          event.preventDefault();
-          sendWs(
-            "keyboard_press",
-            { keys: [key] },
-            { listen: parseFloat(mouseListen.value) || 0, log: false }
-          );
-        });
+      async function sendKeyboard(action, extra = {}) {
+        const payload = { action, ...extra, listen: 0.3 };
+        logSend(`POST /api/keyboard\n${JSON.stringify(payload, null, 2)}`);
+        try {
+          const data = await apiPost("/api/keyboard", payload);
+          logRecv(JSON.stringify(data, null, 2));
+        } catch (err) {
+          logError(err instanceof Error ? err.message : String(err));
+        }
+      }
 
-        overlay.addEventListener("keyup", (event) => {
-          if (overlay.classList.contains("disabled")) {
-            return;
-          }
-          const key = translateKey(event);
-          if (!key) {
-            return;
-          }
-          event.preventDefault();
-          sendWs(
-            "keyboard_release",
-            { keys: [key] },
-            { listen: parseFloat(mouseListen.value) || 0, log: false }
-          );
-        });
+      async function sendMedia(key) {
+        const payload = { key, listen: 0.3 };
+        logSend(`POST /api/media\n${JSON.stringify(payload, null, 2)}`);
+        try {
+          const data = await apiPost("/api/media", payload);
+          logRecv(JSON.stringify(data, null, 2));
+        } catch (err) {
+          logError(err instanceof Error ? err.message : String(err));
+        }
+      }
 
-        async function initialise() {
-          ensureWebsocket();
-          try {
-            const config = await apiGet("/api/config");
-            portInput.value = config.port ?? "";
-            baudInput.value = String(config.baud ?? "115200");
-            setStatus(`Connected to ${config.port} @ ${config.baud} baud`);
-            logInfo(`Initial configuration: ${JSON.stringify(config)}`);
-          } catch (err) {
-            const message = err instanceof Error ? err.message : String(err);
-            setStatus(`Unable to query config: ${message}`, true);
-            logError(message);
-          }
+      async function sendMouse(payload) {
+        const requestPayload = { ...payload, listen: 0.1 };
+        logSend(`POST /api/mouse\n${JSON.stringify(requestPayload, null, 2)}`);
+        try {
+          const data = await apiPost("/api/mouse", requestPayload);
+          logRecv(JSON.stringify(data, null, 2));
+        } catch (err) {
+          logError(err instanceof Error ? err.message : String(err));
+        }
+      }
+
+      function ensureWebsocket() {
+        if (websocket && (websocket.readyState === WebSocket.OPEN || websocket.readyState === WebSocket.CONNECTING)) {
+          return;
+        }
+        const scheme = window.location.protocol === "https:" ? "wss" : "ws";
+        websocket = new WebSocket(`${scheme}://${window.location.host}/ws/hid`);
+
+        websocket.addEventListener("open", () => {
+          logInfo("WebSocket connected");
           updateOverlayState();
+        });
+
+        websocket.addEventListener("message", (event) => {
+          try {
+            const data = JSON.parse(event.data);
+            if (data.status === "error") {
+              logError(JSON.stringify(data, null, 2));
+            } else if (data.type !== "ping") {
+              logRecv(JSON.stringify(data, null, 2));
+            }
+          } catch (err) {
+            logRecv(event.data);
+          }
+        });
+
+        websocket.addEventListener("close", () => {
+          logInfo("WebSocket disconnected");
+          updateOverlayState();
+          setTimeout(ensureWebsocket, 1500);
+        });
+
+        websocket.addEventListener("error", (event) => {
+          logError(`WebSocket error: ${event instanceof ErrorEvent ? event.message : "unknown"}`);
+        });
+      }
+
+      function sendWs(type, payload) {
+        if (!websocket || websocket.readyState !== WebSocket.OPEN) return;
+        const message = {
+          type,
+          requestId: ++wsRequestId,
+          ...payload,
+          listen: 0
+        };
+        websocket.send(JSON.stringify(message));
+      }
+
+      function shouldForwardInput() {
+        return captureEnabled && websocket && websocket.readyState === WebSocket.OPEN;
+      }
+
+      function updateOverlayHint() {
+        if (!captureEnabled) {
+          overlayHint.textContent = "Capture off – click Start Capture";
+        } else if (!websocket || websocket.readyState !== WebSocket.OPEN) {
+          overlayHint.textContent = "WebSocket not connected";
+        } else if (pointerLockEnabled && document.pointerLockElement === overlay) {
+          overlayHint.textContent = "Locked – Esc to release";
+        } else if (pointerLockEnabled) {
+          overlayHint.textContent = "Click to lock pointer";
+        } else {
+          overlayHint.textContent = "Capturing input";
+        }
+      }
+
+      function updateOverlayState() {
+        const canCapture = websocket && websocket.readyState === WebSocket.OPEN;
+        overlay.classList.toggle("disabled", !canCapture);
+        overlay.classList.toggle("inactive", !captureEnabled);
+        overlay.classList.toggle("active", captureEnabled);
+        updateOverlayHint();
+      }
+
+      function updateOrientation() {
+        if (orientationMode === "auto") {
+          if (videoPlaying && remoteVideo.videoWidth && remoteVideo.videoHeight) {
+            const isPortrait = remoteVideo.videoHeight > remoteVideo.videoWidth;
+            viewerContainer.className = isPortrait ? "portrait" : "landscape";
+          } else {
+            viewerContainer.className = "landscape";
+          }
+        } else {
+          viewerContainer.className = orientationMode;
+        }
+      }
+
+      function pointerButtonName(event) {
+        return mouseButtonMap[event.button] || "left";
+      }
+
+      connectionForm.addEventListener("submit", async (event) => {
+        event.preventDefault();
+        const payload = {
+          port: portInput.value.trim(),
+          baud: Number.parseInt(baudInput.value, 10) || 115200,
+        };
+        logSend(`POST /api/config\n${JSON.stringify(payload, null, 2)}`);
+        try {
+          const data = await apiPost("/api/config", payload);
+          setStatus(`Connected to ${data.port} @ ${data.baud} baud`);
+          logRecv(JSON.stringify(data, null, 2));
+        } catch (err) {
+          const message = err instanceof Error ? err.message : String(err);
+          setStatus(message, true);
+          logError(message);
+        }
+      });
+
+      videoLoadButton.addEventListener("click", () => {
+        const url = videoUrlInput.value.trim();
+        if (!url) {
+          logError("Video URL is empty");
+          return;
+        }
+        remoteVideo.src = url;
+        logInfo(`Loading video stream: ${url}`);
+      });
+
+      remoteVideo.addEventListener("loadedmetadata", () => {
+        videoPlaying = true;
+        logInfo(`Video loaded: ${remoteVideo.videoWidth}x${remoteVideo.videoHeight}`);
+        updateOrientation();
+      });
+
+      remoteVideo.addEventListener("play", () => {
+        videoPlaying = true;
+        updateOrientation();
+      });
+
+      remoteVideo.addEventListener("pause", () => {
+        videoPlaying = false;
+      });
+
+      remoteVideo.addEventListener("ended", () => {
+        videoPlaying = false;
+      });
+
+      captureToggle.addEventListener("click", () => {
+        captureEnabled = !captureEnabled;
+        captureToggle.textContent = captureEnabled ? "Stop Capture" : "Start Capture";
+        captureToggle.classList.toggle("active", captureEnabled);
+        updateOverlayState();
+        if (captureEnabled) {
+          setTimeout(() => overlay.focus(), 100);
+        }
+      });
+
+      pointerLockToggle.addEventListener("click", () => {
+        pointerLockEnabled = !pointerLockEnabled;
+        pointerLockToggle.textContent = pointerLockEnabled ? "Disable Pointer Lock" : "Enable Pointer Lock";
+        pointerLockToggle.classList.toggle("active", pointerLockEnabled);
+        if (!pointerLockEnabled && document.pointerLockElement === overlay) {
+          document.exitPointerLock();
+        }
+        updateOverlayHint();
+      });
+
+      overlayRelease.addEventListener("click", () => {
+        if (!shouldForwardInput()) return;
+        sendWs("keyboard_release_all", {});
+        sendWs("mouse_release_all", {});
+        logInfo("Released all keyboard and mouse buttons");
+      });
+
+      orientationToggle.addEventListener("click", () => {
+        const modes = ["auto", "landscape", "portrait"];
+        const currentIndex = modes.indexOf(orientationMode);
+        orientationMode = modes[(currentIndex + 1) % modes.length];
+        orientationToggle.textContent = `Orientation: ${orientationMode.charAt(0).toUpperCase() + orientationMode.slice(1)}`;
+        updateOrientation();
+      });
+
+      overlay.addEventListener("click", () => {
+        if (overlay.classList.contains("disabled") || !pointerLockEnabled) return;
+        overlay.requestPointerLock();
+      });
+
+      document.addEventListener("pointerlockchange", () => {
+        updateOverlayHint();
+      });
+
+      textSendButton.addEventListener("click", sendText);
+      textInput.addEventListener("keydown", (event) => {
+        if ((event.ctrlKey || event.metaKey) && event.key === "Enter") {
+          event.preventDefault();
+          sendText();
+        }
+      });
+
+      comboButtons.addEventListener("click", (event) => {
+        const button = event.target.closest("button[data-keys]");
+        if (!button) return;
+        const keys = button.dataset.keys.split(",").map((key) => key.trim()).filter(Boolean);
+        const hold = Number.parseInt(button.dataset.hold || "80", 10) || 80;
+        sendKeyboard("tap", { keys, holdMs: hold });
+      });
+
+      mediaButtons.addEventListener("click", (event) => {
+        const button = event.target.closest("button[data-key]");
+        if (!button) return;
+        sendMedia(button.dataset.key);
+      });
+
+      moveButtons.addEventListener("click", (event) => {
+        const button = event.target.closest("button");
+        if (!button) return;
+        const dx = Number.parseInt(button.dataset.dx || "0", 10) * (Number.parseInt(mouseStep.value, 10) || 0);
+        const dy = Number.parseInt(button.dataset.dy || "0", 10) * (Number.parseInt(mouseStep.value, 10) || 0);
+        const wheel = Number.parseInt(button.dataset.wheel || "0", 10) * (Number.parseInt(scrollStep.value, 10) || 0);
+        const pan = Number.parseInt(button.dataset.pan || "0", 10) * (Number.parseInt(scrollStep.value, 10) || 0);
+        if (dx === 0 && dy === 0 && wheel === 0 && pan === 0) return;
+        sendMouse({ action: "move", dx, dy, wheel, pan });
+      });
+
+      clickButtons.addEventListener("click", (event) => {
+        const button = event.target.closest("button");
+        if (!button) return;
+        const action = button.dataset.action || "click";
+        if (action === "releaseAll" || action === "release_all") {
+          sendMouse({ action: "releaseAll" });
+          return;
+        }
+        const buttons = (button.dataset.buttons || "left").split(",").map((value) => value.trim()).filter(Boolean);
+        sendMouse({ action, buttons });
+      });
+
+      logClear.addEventListener("click", () => {
+        logContainer.innerHTML = "";
+      });
+
+      let mouseMovePending = false;
+      let pendingDx = 0;
+      let pendingDy = 0;
+
+      function flushMouseMove() {
+        if (!mouseMovePending) return;
+        mouseMovePending = false;
+        if (pendingDx === 0 && pendingDy === 0) return;
+
+        sendWs("mouse_move", { dx: pendingDx, dy: pendingDy });
+        if (logMouseMoves.checked) {
+          logSend(`WS mouse_move dx:${pendingDx} dy:${pendingDy}`);
+        }
+        pendingDx = 0;
+        pendingDy = 0;
+      }
+
+      overlay.addEventListener("mouseenter", () => {
+        if (captureEnabled) {
+          overlay.focus();
+        }
+      });
+
+      overlay.addEventListener("mousemove", (event) => {
+        if (!shouldForwardInput()) return;
+
+        const sensitivity = Number.parseFloat(overlaySensitivity.value) || 1.0;
+        const dx = Math.round(event.movementX * sensitivity);
+        const dy = Math.round(event.movementY * sensitivity);
+
+        if (dx === 0 && dy === 0) return;
+
+        pendingDx += dx;
+        pendingDy += dy;
+
+        if (!mouseMovePending) {
+          mouseMovePending = true;
+          requestAnimationFrame(flushMouseMove);
+        }
+      });
+
+      overlay.addEventListener("wheel", (event) => {
+        if (!shouldForwardInput()) return;
+        event.preventDefault();
+        const amount = Number.parseInt(scrollStep.value, 10) || 1;
+        const wheel = -Math.sign(event.deltaY) * amount;
+        const pan = Math.sign(event.deltaX) * amount;
+        if (wheel === 0 && pan === 0) return;
+        sendWs("mouse_move", { dx: 0, dy: 0, wheel, pan });
+      });
+
+      overlay.addEventListener("mousedown", (event) => {
+        if (!shouldForwardInput()) return;
+        event.preventDefault();
+        overlay.focus();
+        const buttonName = pointerButtonName(event);
+        sendWs("mouse_press", { buttons: [buttonName] });
+      });
+
+      overlay.addEventListener("mouseup", (event) => {
+        if (!shouldForwardInput()) return;
+        event.preventDefault();
+        const buttonName = pointerButtonName(event);
+        sendWs("mouse_release", { buttons: [buttonName] });
+      });
+
+      overlay.addEventListener("contextmenu", (event) => {
+        event.preventDefault();
+      });
+
+      const keyMap = {
+        Control: "CTRL",
+        Alt: "ALT",
+        Shift: "SHIFT",
+        Meta: "GUI",
+        Enter: "ENTER",
+        Tab: "TAB",
+        Escape: "ESC",
+        ArrowUp: "UP",
+        ArrowDown: "DOWN",
+        ArrowLeft: "LEFT",
+        ArrowRight: "RIGHT",
+        Backspace: "BACKSPACE",
+        Delete: "DELETE",
+        Home: "HOME",
+        End: "END",
+        PageUp: "PAGE_UP",
+        PageDown: "PAGE_DOWN",
+        Insert: "INSERT",
+        CapsLock: "CAPS_LOCK",
+        F1: "F1", F2: "F2", F3: "F3", F4: "F4",
+        F5: "F5", F6: "F6", F7: "F7", F8: "F8",
+        F9: "F9", F10: "F10", F11: "F11", F12: "F12",
+      };
+
+      const modifierKeys = new Set(["CTRL", "ALT", "SHIFT", "GUI"]);
+      const heldModifiers = new Set();
+
+      function translateKey(event) {
+        // Check if it's a special key
+        if (keyMap[event.key]) {
+          return keyMap[event.key];
         }
 
-        initialise();
-      })();
-    </script>
-  </body>
+        // For printable characters, use event.key directly (it already has shift applied)
+        if (event.key.length === 1) {
+          return event.key;
+        }
+
+        // Handle space specially
+        if (event.key === " ") {
+          return "SPACE";
+        }
+
+        // Fallback for other keys
+        if (event.code && event.code.startsWith("Key")) {
+          return event.code.slice(3).toUpperCase();
+        }
+        if (event.code && event.code.startsWith("Digit")) {
+          return event.code.slice(5);
+        }
+
+        return null;
+      }
+
+      overlay.addEventListener("keydown", (event) => {
+        if (!shouldForwardInput()) return;
+        if (event.repeat) {
+          event.preventDefault();
+          return;
+        }
+
+        const key = translateKey(event);
+        if (!key) return;
+
+        event.preventDefault();
+        event.stopPropagation();
+
+        // Track modifier keys
+        if (modifierKeys.has(key)) {
+          heldModifiers.add(key);
+        }
+
+        sendWs("keyboard_press", { keys: [key] });
+        if (logMouseMoves.checked) {
+          logSend(`WS keyboard_press: ${key}`);
+        }
+      });
+
+      overlay.addEventListener("keyup", (event) => {
+        if (!shouldForwardInput()) return;
+
+        const key = translateKey(event);
+        if (!key) return;
+
+        event.preventDefault();
+        event.stopPropagation();
+
+        // Track modifier keys
+        if (modifierKeys.has(key)) {
+          heldModifiers.delete(key);
+        }
+
+        sendWs("keyboard_release", { keys: [key] });
+        if (logMouseMoves.checked) {
+          logSend(`WS keyboard_release: ${key}`);
+        }
+      });
+
+      async function initialise() {
+        ensureWebsocket();
+        try {
+          const config = await apiGet("/api/config");
+          portInput.value = config.port ?? "";
+          baudInput.value = String(config.baud ?? "115200");
+          setStatus(`Connected to ${config.port} @ ${config.baud} baud`);
+          logInfo(`Initial configuration: ${JSON.stringify(config)}`);
+        } catch (err) {
+          const message = err instanceof Error ? err.message : String(err);
+          setStatus(`Unable to query config: ${message}`, true);
+          logError(message);
+        }
+        updateOverlayState();
+      }
+
+      initialise();
+    })();
+  </script>
+</body>
+
 </html>

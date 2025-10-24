@@ -1,22 +1,16 @@
 #!/usr/bin/env python3
 """
-FastAPI control surface for the ESP32 BLE HID bridge.
+FastAPI control surface for the ESP32 BLE HID bridge - OPTIMIZED VERSION
 
-The API exposes endpoints that mirror the UART JSON commands used by the
-firmware. A lightweight web UI (served from /) lets you type text, trigger
-key combinations, control media keys, and move/click the mouse.
-
-Launch with:
-    uvicorn web.server:app --reload
-
-Before starting the server set UART_PORT (e.g. COM3) and UART_BAUD as needed,
-or use the /api/config endpoint / Connect UI form to switch ports at runtime.
+Key changes:
+- Removed async executor for WebSocket to eliminate latency
+- Set listen=0 for all mouse/keyboard WebSocket commands
+- Direct serial writes without waiting for responses on WS
 """
 
 from __future__ import annotations
 
 import json
-import asyncio
 import os
 import threading
 import time
@@ -83,7 +77,7 @@ class SerialBridge:
         responses: List[str] = []
 
         with self._lock:
-            assert self._serial is not None  # for type checkers
+            assert self._serial is not None
             self._serial.reset_input_buffer()
             self._serial.write(serialized.encode("utf-8") + b"\n")
             self._serial.flush()
@@ -102,11 +96,15 @@ class SerialBridge:
 
         return responses
 
-    async def send_async(
-        self, payload: dict, listen: float = DEFAULT_LISTEN_SECONDS
-    ) -> List[str]:
-        loop = asyncio.get_running_loop()
-        return await loop.run_in_executor(None, self.send, payload, listen)
+    def send_fast(self, payload: dict) -> None:
+        """Send command without waiting for response - for low-latency input"""
+        self.ensure_connection()
+        serialized = json.dumps(payload, separators=(",", ":"))
+
+        with self._lock:
+            assert self._serial is not None
+            self._serial.write(serialized.encode("utf-8") + b"\n")
+            self._serial.flush()
 
     def close(self) -> None:
         with self._lock:
@@ -146,7 +144,9 @@ class RawKeyboardPayload(ListenMixin):
 
 
 class MousePayload(ListenMixin):
-    action: Literal["move", "click", "press", "release", "releaseAll", "release_all"] = "move"
+    action: Literal[
+        "move", "click", "press", "release", "releaseAll", "release_all"
+    ] = "move"
     dx: Optional[int] = 0
     dy: Optional[int] = 0
     wheel: Optional[int] = 0
@@ -176,7 +176,6 @@ def startup() -> None:
     try:
         bridge.connect()
     except HTTPException as exc:
-        # Delay connection issues until first API call so UI can adjust port.
         print(f"[server] Warning: {exc.detail}")
 
 
@@ -282,7 +281,6 @@ async def websocket_hid(websocket: WebSocket) -> None:
             data = await websocket.receive_json()
             msg_type = data.get("type")
             request_id = data.get("requestId")
-            listen = max(float(data.get("listen", 0) or 0), 0.0)
 
             if not msg_type:
                 if request_id is not None:
@@ -296,8 +294,7 @@ async def websocket_hid(websocket: WebSocket) -> None:
                 continue
 
             try:
-                responses: List[str] = []
-
+                # Use fast send (no wait) for real-time input
                 if msg_type == "mouse_move":
                     payload = {
                         "device": "mouse",
@@ -307,7 +304,7 @@ async def websocket_hid(websocket: WebSocket) -> None:
                         "wheel": int(data.get("wheel", 0) or 0),
                         "pan": int(data.get("pan", 0) or 0),
                     }
-                    responses = await bridge.send_async(payload, listen)
+                    bridge.send_fast(payload)
                 elif msg_type == "mouse_click":
                     buttons = _normalize_list(data.get("buttons"), ["left"])
                     payload = {
@@ -315,7 +312,7 @@ async def websocket_hid(websocket: WebSocket) -> None:
                         "action": "click",
                         "buttons": buttons,
                     }
-                    responses = await bridge.send_async(payload, listen)
+                    bridge.send_fast(payload)
                 elif msg_type == "mouse_press":
                     buttons = _normalize_list(data.get("buttons"), ["left"])
                     payload = {
@@ -323,7 +320,7 @@ async def websocket_hid(websocket: WebSocket) -> None:
                         "action": "press",
                         "buttons": buttons,
                     }
-                    responses = await bridge.send_async(payload, listen)
+                    bridge.send_fast(payload)
                 elif msg_type == "mouse_release":
                     buttons = _normalize_list(data.get("buttons"), ["left"])
                     payload = {
@@ -331,10 +328,10 @@ async def websocket_hid(websocket: WebSocket) -> None:
                         "action": "release",
                         "buttons": buttons,
                     }
-                    responses = await bridge.send_async(payload, listen)
+                    bridge.send_fast(payload)
                 elif msg_type == "mouse_release_all":
                     payload = {"device": "mouse", "action": "releaseAll"}
-                    responses = await bridge.send_async(payload, listen)
+                    bridge.send_fast(payload)
                 elif msg_type == "keyboard_press":
                     keys = _normalize_list(data.get("keys"), [])
                     if keys:
@@ -343,7 +340,7 @@ async def websocket_hid(websocket: WebSocket) -> None:
                             "action": "press",
                             "keys": keys,
                         }
-                        responses = await bridge.send_async(payload, listen)
+                        bridge.send_fast(payload)
                 elif msg_type == "keyboard_release":
                     keys = _normalize_list(data.get("keys"), [])
                     if keys:
@@ -352,12 +349,12 @@ async def websocket_hid(websocket: WebSocket) -> None:
                             "action": "release",
                             "keys": keys,
                         }
-                        responses = await bridge.send_async(payload, listen)
+                        bridge.send_fast(payload)
                 elif msg_type == "keyboard_release_all":
                     payload = {"device": "keyboard", "action": "releaseAll"}
-                    responses = await bridge.send_async(payload, listen)
+                    bridge.send_fast(payload)
                 elif msg_type == "ping":
-                    responses = []
+                    pass
                 else:
                     raise ValueError(f"Unsupported message type: {msg_type}")
 
@@ -367,7 +364,6 @@ async def websocket_hid(websocket: WebSocket) -> None:
                             "status": "ok",
                             "type": msg_type,
                             "requestId": request_id,
-                            "responses": responses,
                         }
                     )
             except HTTPException as exc:
@@ -380,7 +376,7 @@ async def websocket_hid(websocket: WebSocket) -> None:
                             "detail": exc.detail,
                         }
                     )
-            except Exception as exc:  # pylint: disable=broad-except
+            except Exception as exc:
                 if request_id is not None:
                     await websocket.send_json(
                         {
