@@ -16,6 +16,8 @@ or on Linux:
 python3 -m pip install fastapi "uvicorn[standard]" pyserial
 ```
 
+For the WebRTC video bridge and browser viewer, make sure the system GStreamer dependencies listed in [`web/video_feed/README.md`](video_feed/README.md) are installed so that `webrtcbin` and related plugins are available.
+
 ## Running the server
 
 ```powershell
@@ -37,7 +39,7 @@ Once the server is running, open <http://127.0.0.1:8000/> in your browser. The p
 - **Key combos** – quick buttons for shortcuts such as Ctrl+Alt+Delete.
 - **Media controls** – play/pause, next/previous track, volume, mute, etc.
 - **Mouse controls** – directional movement, scrolling/panning, and click buttons.
-- **Remote viewer overlay** – drop in your GStreamer/uxplayer `<video>` feed and capture mouse/keyboard input whenever the pointer is inside the frame.
+- **Remote viewer overlay** – click **Start WebRTC Stream** to negotiate the GStreamer-powered WebRTC feed and capture mouse/keyboard input whenever the pointer is inside the frame.
 - **Log view** – shows both the commands issued and the JSON responses from the device.
 
 If the ESP32 is not yet in range or paired, the UI will still load; once the device is ready, use the Connect form to reopen the serial port.

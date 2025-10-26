@@ -23,6 +23,8 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
+from web.video_feed.bridge import BridgeApp, FrameBuffer
+
 DEFAULT_PORT = os.getenv("UART_PORT", "COM3")
 DEFAULT_BAUD = int(os.getenv("UART_BAUD", "115200"))
 DEFAULT_LISTEN_SECONDS = float(os.getenv("UART_LISTEN_SECONDS", "0.5"))
@@ -114,6 +116,7 @@ class SerialBridge:
 
 
 bridge = SerialBridge(port=DEFAULT_PORT, baud=DEFAULT_BAUD)
+frame_buffer = FrameBuffer()
 
 
 class ListenMixin(BaseModel):
@@ -169,6 +172,9 @@ class ConfigPayload(BaseModel):
 
 app = FastAPI(title="UART HID Control")
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
+
+video_bridge = BridgeApp(frame_buffer=frame_buffer)
+video_bridge.attach(app)
 
 
 @app.on_event("startup")

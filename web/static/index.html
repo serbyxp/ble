@@ -314,11 +314,11 @@
   <section>
     <fieldset>
       <legend>Remote Viewer</legend>
-      <div class="row">
-        <label>Video Stream URL <input type="text" id="video-url-input"
-            placeholder="http://192.168.1.100:7100/stream.mjpg" /></label>
-        <button type="button" id="video-load-button">Load Stream</button>
+      <div class="row" id="video-controls">
+        <button type="button" id="video-start-button">Start WebRTC Stream</button>
+        <button type="button" class="secondary" id="video-stop-button" disabled>Stop Stream</button>
       </div>
+      <div class="status" id="video-status">Idle. Click "Start WebRTC Stream" to negotiate the viewer.</div>
       <div id="viewer-container" class="landscape">
         <video id="remote-video" autoplay muted playsinline></video>
         <div id="viewer-overlay" class="inactive disabled" tabindex="0">
@@ -336,8 +336,8 @@
         </label>
       </div>
       <small>
-        UxPlay streams at 1920x1080 (landscape) or 1080x1920 (portrait). Enter stream URL and click "Load Stream".
-        Use "Start Capture" then click overlay to enable pointer lock for best mouse response.
+        Click "Start WebRTC Stream" to negotiate a secure WebRTC session with the bridge. Once video is visible you can enable
+        pointer lock and capture input for precise HID control.
       </small>
     </fieldset>
   </section>
@@ -427,9 +427,10 @@
       const portInput = document.getElementById("port-input");
       const baudInput = document.getElementById("baud-input");
       const connectionStatus = document.getElementById("connection-status");
-      const videoUrlInput = document.getElementById("video-url-input");
-      const videoLoadButton = document.getElementById("video-load-button");
       const remoteVideo = document.getElementById("remote-video");
+      const videoStartButton = document.getElementById("video-start-button");
+      const videoStopButton = document.getElementById("video-stop-button");
+      const videoStatus = document.getElementById("video-status");
       const textInput = document.getElementById("text-input");
       const textNewline = document.getElementById("text-newline");
       const textDelay = document.getElementById("text-delay");
@@ -458,6 +459,11 @@
       let pointerLockEnabled = false;
       let orientationMode = "auto";
       let videoPlaying = false;
+      let rtcPeer = null;
+      let rtcIcePollTimer = null;
+      let rtcIceRequestPending = false;
+      let rtcSessionActive = false;
+      let rtcConfiguration = null;
 
       const mouseButtonMap = ["left", "middle", "right", "back", "forward"];
 
@@ -616,11 +622,18 @@
       }
 
       function shouldForwardInput() {
-        return captureEnabled && websocket && websocket.readyState === WebSocket.OPEN;
+        return (
+          captureEnabled &&
+          websocket &&
+          websocket.readyState === WebSocket.OPEN &&
+          rtcSessionActive
+        );
       }
 
       function updateOverlayHint() {
-        if (!captureEnabled) {
+        if (!rtcSessionActive) {
+          overlayHint.textContent = "Start the WebRTC stream to enable control";
+        } else if (!captureEnabled) {
           overlayHint.textContent = "Capture off – click Start Capture";
         } else if (!websocket || websocket.readyState !== WebSocket.OPEN) {
           overlayHint.textContent = "WebSocket not connected";
@@ -634,10 +647,13 @@
       }
 
       function updateOverlayState() {
-        const canCapture = websocket && websocket.readyState === WebSocket.OPEN;
+        const canCapture =
+          websocket &&
+          websocket.readyState === WebSocket.OPEN &&
+          rtcSessionActive;
         overlay.classList.toggle("disabled", !canCapture);
         overlay.classList.toggle("inactive", !captureEnabled);
-        overlay.classList.toggle("active", captureEnabled);
+        overlay.classList.toggle("active", captureEnabled && canCapture);
         updateOverlayHint();
       }
 
@@ -676,14 +692,189 @@
         }
       });
 
-      videoLoadButton.addEventListener("click", () => {
-        const url = videoUrlInput.value.trim();
-        if (!url) {
-          logError("Video URL is empty");
+      function setVideoStatus(message, isError = false) {
+        if (!videoStatus) return;
+        videoStatus.textContent = message;
+        videoStatus.classList.toggle("error", Boolean(isError));
+      }
+
+      function updateVideoButtons(active) {
+        if (videoStartButton) videoStartButton.disabled = active;
+        if (videoStopButton) videoStopButton.disabled = !active;
+      }
+
+      async function fetchRemoteIce() {
+        if (!rtcPeer || rtcIceRequestPending) return;
+        const peer = rtcPeer;
+        if (!peer || peer.signalingState === "closed") return;
+        rtcIceRequestPending = true;
+        try {
+          const response = await fetch("/video/ice");
+          if (!response.ok) {
+            throw new Error(`ICE fetch failed: ${response.status} ${response.statusText}`);
+          }
+          const data = await response.json();
+          const candidates = Array.isArray(data.candidates) ? data.candidates : [];
+          for (const candidate of candidates) {
+            if (!peer || peer.signalingState === "closed") break;
+            await peer.addIceCandidate(candidate);
+          }
+        } catch (err) {
+          logError(err instanceof Error ? err.message : String(err));
+        } finally {
+          rtcIceRequestPending = false;
+        }
+      }
+
+      function resetVideoElement() {
+        if (!remoteVideo) return;
+        remoteVideo.pause();
+        remoteVideo.srcObject = null;
+        remoteVideo.removeAttribute("src");
+      }
+
+      async function startWebRTC() {
+        if (rtcPeer) {
+          logInfo("WebRTC stream already active");
           return;
         }
-        remoteVideo.src = url;
-        logInfo(`Loading video stream: ${url}`);
+        try {
+          setVideoStatus("Negotiating WebRTC stream…");
+          logInfo("Negotiating WebRTC stream");
+          updateVideoButtons(true);
+          rtcSessionActive = false;
+          rtcIceRequestPending = false;
+
+          const peerConfig = rtcConfiguration ?? {};
+          rtcPeer = new RTCPeerConnection(peerConfig);
+          if (Array.isArray(peerConfig.iceServers) && peerConfig.iceServers.length > 0) {
+            const urls = peerConfig.iceServers
+              .map((entry) => {
+                if (!entry) return "";
+                const value = entry.urls;
+                if (Array.isArray(value)) {
+                  return value.join(",");
+                }
+                return value ?? "";
+              })
+              .filter(Boolean)
+              .join(", ");
+            logInfo(`Using ICE servers: ${urls}`);
+          }
+          rtcPeer.addTransceiver("video", { direction: "recvonly" });
+
+          rtcPeer.ontrack = (event) => {
+            const [stream] = event.streams || [];
+            if (!stream) return;
+            remoteVideo.srcObject = stream;
+            videoPlaying = true;
+            rtcSessionActive = true;
+            setVideoStatus("WebRTC stream active.");
+            logInfo("WebRTC stream active");
+            updateOrientation();
+            updateOverlayState();
+          };
+
+          rtcPeer.onicecandidate = (event) => {
+            if (!event.candidate) return;
+            fetch("/video/ice", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                candidate: event.candidate.candidate,
+                sdpMid: event.candidate.sdpMid,
+                sdpMLineIndex: event.candidate.sdpMLineIndex
+              })
+            }).catch((err) => {
+              logError(err instanceof Error ? err.message : String(err));
+            });
+          };
+
+          rtcPeer.addEventListener("iceconnectionstatechange", () => {
+            if (!rtcPeer) return;
+            const state = rtcPeer.iceConnectionState;
+            if (state === "connected" || state === "completed") {
+              rtcSessionActive = true;
+              setVideoStatus("WebRTC stream active.");
+              updateOverlayState();
+            } else if (state === "failed") {
+              setVideoStatus("ICE negotiation failed", true);
+              logError("ICE negotiation failed");
+              stopWebRTC(true);
+            } else if (state === "disconnected") {
+              setVideoStatus("WebRTC stream disconnected", true);
+              logError("WebRTC stream disconnected");
+              stopWebRTC(true);
+            }
+          });
+
+          rtcPeer.addEventListener("connectionstatechange", () => {
+            if (!rtcPeer) return;
+            if (rtcPeer.connectionState === "failed") {
+              setVideoStatus("WebRTC transport failed", true);
+              logError("WebRTC connection state failed");
+              stopWebRTC(true);
+            }
+          });
+
+          const offer = await rtcPeer.createOffer();
+          await rtcPeer.setLocalDescription(offer);
+
+          const response = await fetch("/video/offer", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ sdp: offer.sdp })
+          });
+          if (!response.ok) {
+            throw new Error(`Offer failed: ${response.status} ${response.statusText}`);
+          }
+          const answer = await response.json();
+          await rtcPeer.setRemoteDescription({ type: "answer", sdp: answer.sdp });
+
+          setVideoStatus("Awaiting ICE connectivity…");
+          updateOverlayState();
+          await fetchRemoteIce();
+          rtcIcePollTimer = window.setInterval(fetchRemoteIce, 1000);
+        } catch (err) {
+          const message = err instanceof Error ? err.message : String(err);
+          logError(message);
+          setVideoStatus(message, true);
+          stopWebRTC(true);
+        }
+      }
+
+      function stopWebRTC(silent = false) {
+        if (rtcIcePollTimer) {
+          window.clearInterval(rtcIcePollTimer);
+          rtcIcePollTimer = null;
+        }
+        rtcIceRequestPending = false;
+        if (rtcPeer) {
+          rtcPeer.close();
+          rtcPeer = null;
+        }
+        rtcSessionActive = false;
+        videoPlaying = false;
+        resetVideoElement();
+        updateVideoButtons(false);
+        updateOverlayState();
+        updateOrientation();
+        if (!silent) {
+          setVideoStatus("Stream stopped.");
+          logInfo("WebRTC stream stopped");
+        }
+      }
+
+      updateVideoButtons(false);
+      setVideoStatus("Idle. Click \"Start WebRTC Stream\" to negotiate the viewer.");
+
+      videoStartButton.addEventListener("click", () => {
+        startWebRTC();
+      });
+
+      videoStopButton.addEventListener("click", () => {
+        setVideoStatus("Stopping stream…");
+        stopWebRTC();
       });
 
       remoteVideo.addEventListener("loadedmetadata", () => {
@@ -699,10 +890,12 @@
 
       remoteVideo.addEventListener("pause", () => {
         videoPlaying = false;
+        updateOrientation();
       });
 
       remoteVideo.addEventListener("ended", () => {
         videoPlaying = false;
+        updateOrientation();
       });
 
       captureToggle.addEventListener("click", () => {
@@ -975,6 +1168,16 @@
           const message = err instanceof Error ? err.message : String(err);
           setStatus(`Unable to query config: ${message}`, true);
           logError(message);
+        }
+        try {
+          const videoConfig = await apiGet("/video/config");
+          if (videoConfig && Array.isArray(videoConfig.iceServers) && videoConfig.iceServers.length > 0) {
+            rtcConfiguration = { iceServers: videoConfig.iceServers };
+            logInfo(`Loaded WebRTC ICE servers (${videoConfig.iceServers.length})`);
+          }
+        } catch (err) {
+          const message = err instanceof Error ? err.message : String(err);
+          logInfo(`WebRTC ICE configuration unavailable: ${message}`);
         }
         updateOverlayState();
       }
