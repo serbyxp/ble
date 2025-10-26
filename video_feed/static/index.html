@@ -1,0 +1,137 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>iOS Automation Video Feed</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <style>
+      body {
+        font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        margin: 0;
+        background: #0f172a;
+        color: #f8fafc;
+        display: flex;
+        flex-direction: column;
+        min-height: 100vh;
+      }
+      header,
+      footer {
+        padding: 1rem;
+        text-align: center;
+      }
+      main {
+        flex: 1;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        gap: 1rem;
+        padding: 1rem;
+      }
+      video {
+        width: min(90vw, 480px);
+        box-shadow: 0 20px 40px rgba(15, 23, 42, 0.35);
+        border-radius: 16px;
+        background: #020617;
+      }
+      button {
+        border: none;
+        border-radius: 999px;
+        padding: 0.75rem 1.5rem;
+        background: #38bdf8;
+        color: #0f172a;
+        font-size: 1rem;
+        font-weight: 600;
+        cursor: pointer;
+        transition: transform 150ms ease, box-shadow 150ms ease;
+      }
+      button:hover {
+        transform: translateY(-1px);
+        box-shadow: 0 10px 24px rgba(56, 189, 248, 0.35);
+      }
+      button:disabled {
+        opacity: 0.6;
+        cursor: not-allowed;
+        box-shadow: none;
+      }
+      #status {
+        font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas,
+          "Liberation Mono", "Courier New", monospace;
+        background: rgba(15, 23, 42, 0.65);
+        padding: 0.5rem 1rem;
+        border-radius: 12px;
+        min-height: 1.5rem;
+      }
+    </style>
+  </head>
+  <body>
+    <header>
+      <h1>Automation Video Monitor</h1>
+      <p>WebRTC preview for the headless uxplay → OpenCV pipeline.</p>
+    </header>
+    <main>
+      <video id="video" autoplay playsinline muted></video>
+      <button id="start">Connect</button>
+      <div id="status">Idle</div>
+    </main>
+    <footer>
+      <small>Monitor only – automation runs inside the Python backend.</small>
+    </footer>
+    <script>
+      const statusEl = document.getElementById("status");
+      const videoEl = document.getElementById("video");
+      const startBtn = document.getElementById("start");
+
+      function setStatus(text) {
+        statusEl.textContent = text;
+      }
+
+      async function start() {
+        startBtn.disabled = true;
+        setStatus("Connecting…");
+
+        const pc = new RTCPeerConnection();
+        pc.addTransceiver("video", { direction: "recvonly" });
+
+        pc.ontrack = (event) => {
+          if (event.streams && event.streams[0]) {
+            videoEl.srcObject = event.streams[0];
+          }
+        };
+
+        pc.onconnectionstatechange = () => {
+          setStatus(`Peer connection: ${pc.connectionState}`);
+        };
+
+        try {
+          const offer = await pc.createOffer();
+          await pc.setLocalDescription(offer);
+
+          const response = await fetch("/offer", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(pc.localDescription),
+          });
+
+          if (!response.ok) {
+            throw new Error(`Server responded with ${response.status}`);
+          }
+
+          const answer = await response.json();
+          await pc.setRemoteDescription(answer);
+          setStatus("Streaming");
+        } catch (err) {
+          console.error(err);
+          setStatus(`Error: ${err.message}`);
+          startBtn.disabled = false;
+        }
+
+        window.addEventListener("beforeunload", () => {
+          pc.close();
+        });
+      }
+
+      startBtn.addEventListener("click", start);
+    </script>
+  </body>
+</html>

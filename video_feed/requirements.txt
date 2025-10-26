@@ -1,0 +1,8 @@
+aiohttp==3.9.5
+aiortc==1.6.0
+av==10.0.0
+fastapi==0.111.0
+numpy==1.26.4
+opencv-python==4.9.0.80
+pydantic==2.7.1
+uvicorn[standard]==0.29.0
