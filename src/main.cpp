@@ -25,6 +25,7 @@ constexpr const char *NVS_KEY_SSID = "ssid";
 constexpr const char *NVS_KEY_PASS = "password";
 constexpr unsigned long WIFI_CONNECT_TIMEOUT_MS = 20000;
 constexpr unsigned long WIFI_RETRY_DELAY_MS = 500;
+constexpr unsigned long WIFI_AP_SHUTDOWN_DELAY_MS = 3000;
 constexpr const char *CONFIG_AP_SSID = "uhid-setup";
 constexpr const char *CONFIG_AP_PASSWORD = "uhid1234";
 constexpr uint16_t DNS_PORT = 53;
@@ -48,6 +49,22 @@ void startAccessPoint();
 String inputBuffer;
 bool lastBleConnectionState = false;
 bool configurationMode = false;
+
+enum class WifiState : uint8_t
+{
+  ApOnly,
+  ApSta,
+  TransitioningToSta,
+  StaOnly
+};
+
+WifiState wifiState = WifiState::ApOnly;
+wifi_mode_t wifiCurrentMode = WIFI_MODE_NULL;
+wifi_mode_t wifiTargetMode = WIFI_MODE_AP;
+bool temporaryApStaMode = false;
+bool apShutdownPending = false;
+unsigned long apShutdownDeadline = 0;
+bool staConnectInProgress = false;
 
 struct NamedCode
 {
@@ -370,6 +387,99 @@ void stopCaptivePortalServices()
   }
 }
 
+bool isApMode(wifi_mode_t mode)
+{
+  return mode == WIFI_MODE_AP || mode == WIFI_MODE_APSTA;
+}
+
+void setWifiModeTracked(wifi_mode_t mode)
+{
+  if (wifiCurrentMode == mode)
+  {
+    return;
+  }
+  if (wifiCurrentMode == WIFI_MODE_NULL)
+  {
+    WiFi.mode(mode);
+  }
+  else
+  {
+    esp_wifi_set_mode(mode);
+  }
+  wifiCurrentMode = mode;
+}
+
+void ensureApOnlyMode()
+{
+  temporaryApStaMode = false;
+  wifiTargetMode = WIFI_MODE_AP;
+  wifiState = WifiState::ApOnly;
+  setWifiModeTracked(WIFI_MODE_AP);
+}
+
+void ensureStaOnlyMode()
+{
+  temporaryApStaMode = false;
+  wifiTargetMode = WIFI_MODE_STA;
+  wifiState = WifiState::StaOnly;
+  setWifiModeTracked(WIFI_MODE_STA);
+}
+
+void requestApStaMode(bool temporary)
+{
+  setWifiModeTracked(WIFI_MODE_APSTA);
+  wifiState = WifiState::ApSta;
+  temporaryApStaMode = temporary;
+  wifiTargetMode = temporary ? WIFI_MODE_AP : WIFI_MODE_STA;
+}
+
+void restoreApModeAfterTemporarySta()
+{
+  if (temporaryApStaMode && wifiState == WifiState::ApSta)
+  {
+    ensureApOnlyMode();
+  }
+}
+
+void shutdownAccessPoint()
+{
+  wifi_mode_t mode = WIFI_MODE_NULL;
+  esp_wifi_get_mode(&mode);
+  if (!isApMode(mode))
+  {
+    ensureStaOnlyMode();
+    configurationMode = false;
+    return;
+  }
+
+  WiFi.softAPdisconnect(true);
+  stopCaptivePortalServices();
+  ensureStaOnlyMode();
+  configurationMode = false;
+}
+
+void scheduleStaOnlyTransition()
+{
+  if (wifiState != WifiState::ApSta || temporaryApStaMode)
+  {
+    return;
+  }
+  apShutdownPending = true;
+  apShutdownDeadline = millis() + WIFI_AP_SHUTDOWN_DELAY_MS;
+  wifiState = WifiState::TransitioningToSta;
+  wifiTargetMode = WIFI_MODE_STA;
+}
+
+void finalizeStaOnlyTransition()
+{
+  if (!apShutdownPending)
+  {
+    return;
+  }
+  apShutdownPending = false;
+  shutdownAccessPoint();
+}
+
 void handleIndex()
 {
   sendPortalPage();
@@ -389,6 +499,7 @@ void handleNotFound()
 
 void handleScan()
 {
+  requestApStaMode(true);
   wifi_scan_config_t scanConfig = {};
   scanConfig.show_hidden = false;
   scanConfig.scan_type = WIFI_SCAN_TYPE_ACTIVE;
@@ -396,6 +507,7 @@ void handleScan()
   esp_err_t err = esp_wifi_scan_start(&scanConfig, true);
   if (err != ESP_OK)
   {
+    restoreApModeAfterTemporarySta();
     DynamicJsonDocument response(160);
     response["status"] = "error";
     response["message"] = "Scan failed";
@@ -408,6 +520,7 @@ void handleScan()
   esp_err_t countErr = esp_wifi_scan_get_ap_num(&apCount);
   if (countErr != ESP_OK)
   {
+    restoreApModeAfterTemporarySta();
     DynamicJsonDocument response(160);
     response["status"] = "error";
     response["message"] = "Unable to read scan results";
@@ -446,6 +559,7 @@ void handleScan()
     ++added;
   }
 
+  restoreApModeAfterTemporarySta();
   doc["status"] = "ok";
   sendJsonResponse(200, doc);
 }
@@ -536,26 +650,14 @@ void initializeWebServer()
 
 void stopAccessPoint()
 {
-  wifi_mode_t mode = WiFi.getMode();
-  if (mode & WIFI_MODE_AP)
-  {
-    WiFi.softAPdisconnect(true);
-    stopCaptivePortalServices();
-    if (mode == WIFI_MODE_AP)
-    {
-      WiFi.mode(WIFI_OFF);
-    }
-    else if (mode == WIFI_MODE_APSTA)
-    {
-      WiFi.mode(WIFI_MODE_STA);
-    }
-    configurationMode = false;
-  }
+  apShutdownPending = false;
+  shutdownAccessPoint();
 }
 
 void startAccessPoint()
 {
-  WiFi.mode(WIFI_MODE_APSTA);
+  apShutdownPending = false;
+  ensureApOnlyMode();
   IPAddress localIp(192, 168, 4, 1);
   IPAddress gateway(192, 168, 4, 1);
   IPAddress subnet(255, 255, 255, 0);
@@ -572,24 +674,31 @@ bool connectToStation(const String &ssid, const String &password, bool keepApAct
     return false;
   }
 
+  apShutdownPending = false;
   if (keepApActive)
   {
-    WiFi.mode(WIFI_MODE_APSTA);
+    requestApStaMode(false);
   }
   else
   {
-    WiFi.mode(WIFI_MODE_STA);
+    shutdownAccessPoint();
   }
   WiFi.persistent(false);
   WiFi.setAutoReconnect(true);
   WiFi.begin(ssid.c_str(), password.c_str());
 
+  staConnectInProgress = true;
   unsigned long startAttempt = millis();
   while ((millis() - startAttempt) < WIFI_CONNECT_TIMEOUT_MS)
   {
     wl_status_t status = WiFi.status();
     if (status == WL_CONNECTED)
     {
+      staConnectInProgress = false;
+      if (!keepApActive)
+      {
+        configurationMode = false;
+      }
       return true;
     }
     if (status == WL_CONNECT_FAILED || status == WL_CONNECTION_LOST || status == WL_DISCONNECTED)
@@ -599,11 +708,11 @@ bool connectToStation(const String &ssid, const String &password, bool keepApAct
     delay(WIFI_RETRY_DELAY_MS);
   }
 
+  staConnectInProgress = false;
   if (keepApActive)
   {
     esp_wifi_disconnect();
-    WiFi.mode(WIFI_MODE_APSTA);
-    startCaptivePortalServices();
+    startAccessPoint();
   }
   else
   {
@@ -652,10 +761,34 @@ bool connectStationAndPersist(const String &ssid, const String &password, bool k
     return false;
   }
 
-  stopAccessPoint();
-  configurationMode = false;
+  if (!keepApActive)
+  {
+    stopAccessPoint();
+  }
   sendEvent("wifi_sta_connected", ssid.c_str());
   return true;
+}
+
+void processWifiStateMachine()
+{
+  if (apShutdownPending && millis() >= apShutdownDeadline)
+  {
+    finalizeStaOnlyTransition();
+  }
+}
+
+void onWifiEvent(WiFiEvent_t event, WiFiEventInfo_t info)
+{
+  (void)info;
+#if defined(ESP_ARDUINO_VERSION_MAJOR) && ESP_ARDUINO_VERSION_MAJOR >= 2
+  if (event == ARDUINO_EVENT_WIFI_STA_GOT_IP)
+#else
+  if (event == SYSTEM_EVENT_STA_GOT_IP)
+#endif
+  {
+    staConnectInProgress = false;
+    scheduleStaOnlyTransition();
+  }
 }
 
 bool lookupKeyCode(const String &token, uint8_t &code)
@@ -1493,6 +1626,7 @@ void setup()
   Mouse.begin();
 
   initializeWebServer();
+  WiFi.onEvent(onWifiEvent);
 
   if (!initializeNvs())
   {
@@ -1566,5 +1700,6 @@ void loop()
     webServer.handleClient();
   }
 
+  processWifiStateMachine();
   delay(2);
 }
