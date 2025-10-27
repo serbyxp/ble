@@ -21,6 +21,7 @@
 #include <atomic>
 #include <algorithm>
 #include <vector>
+#include <cstdio>
 
 namespace
 {
@@ -92,6 +93,10 @@ TransportMode stringToTransportMode(const char *value);
 esp_err_t handleTransportGet(httpd_req_t *req);
 esp_err_t handleTransportPost(httpd_req_t *req);
 void sendEvent(const char *name, const char *detail = nullptr);
+void publishWifiState(const char *state, const char *ssid = nullptr, const char *message = "");
+void sendCachedWifiState();
+void appendWifiStateJson(JsonVariant doc);
+esp_err_t handleWifiStateGet(httpd_req_t *req);
 void applyUartBaudRate(uint32_t baud);
 void flushInputBuffer();
 void processCommand(const String &payload);
@@ -339,6 +344,9 @@ void startAccessPoint();
 String inputBuffer;
 bool lastBleConnectionState = false;
 bool configurationMode = false;
+String lastWifiState;
+String lastWifiSsid;
+String lastWifiMessage;
 
 enum class WifiState : uint8_t
 {
@@ -939,18 +947,33 @@ esp_err_t handleConfigure(httpd_req_t *req)
   bool connected = connectStationAndPersist(ssid, password, true);
 
   DynamicJsonDocument response(192);
-  response["ssid"] = ssid;
-
+  appendWifiStateJson(response);
   if (connected)
   {
     response["status"] = "ok";
-    response["message"] = "Connected";
+    if (!response.containsKey("ssid"))
+    {
+      response["ssid"] = ssid;
+    }
+    const char *messageValue = response.containsKey("message") ? response["message"].as<const char *>() : nullptr;
+    if (!messageValue || messageValue[0] == '\0')
+    {
+      response["message"] = "Connected";
+    }
     return sendJsonResponse(req, 200, response);
   }
   else
   {
     response["status"] = "error";
-    response["message"] = "Failed to connect";
+    if (!response.containsKey("ssid"))
+    {
+      response["ssid"] = ssid;
+    }
+    const char *messageValue = response.containsKey("message") ? response["message"].as<const char *>() : nullptr;
+    if (!messageValue || messageValue[0] == '\0')
+    {
+      response["message"] = "Failed to connect";
+    }
     sendJsonResponse(req, 500, response);
     if (!configurationMode)
     {
@@ -958,6 +981,14 @@ esp_err_t handleConfigure(httpd_req_t *req)
     }
     return ESP_OK;
   }
+}
+
+esp_err_t handleWifiStateGet(httpd_req_t *req)
+{
+  DynamicJsonDocument doc(192);
+  doc["status"] = "ok";
+  appendWifiStateJson(doc);
+  return sendJsonResponse(req, 200, doc);
 }
 
 esp_err_t handleTransportGet(httpd_req_t *req)
@@ -1101,6 +1132,15 @@ void registerHttpEndpoints(httpd_handle_t server)
       .handle_ws_control_frames = false,
       .supported_subprotocol = nullptr};
 
+  static const httpd_uri_t wifiStateGetUri = {
+      .uri = "/api/wifi/state",
+      .method = HTTP_GET,
+      .handler = handleWifiStateGet,
+      .user_ctx = nullptr,
+      .is_websocket = false,
+      .handle_ws_control_frames = false,
+      .supported_subprotocol = nullptr};
+
   static const httpd_uri_t transportGetUri = {
       .uri = "/api/transport",
       .method = HTTP_GET,
@@ -1150,6 +1190,7 @@ void registerHttpEndpoints(httpd_handle_t server)
   httpd_register_uri_handler(server, &indexHtmlUri);
   httpd_register_uri_handler(server, &scanUri);
   httpd_register_uri_handler(server, &configureUri);
+  httpd_register_uri_handler(server, &wifiStateGetUri);
   httpd_register_uri_handler(server, &transportGetUri);
   httpd_register_uri_handler(server, &transportPostUri);
   httpd_register_uri_handler(server, &androidPortalUri);
@@ -1190,6 +1231,7 @@ esp_err_t handleWebSocket(httpd_req_t *req)
   if (req->method == HTTP_GET)
   {
     wsClientSocket = httpd_req_to_sockfd(req);
+    sendCachedWifiState();
     return ESP_OK;
   }
 
@@ -1516,15 +1558,169 @@ void sendEvent(const char *name, const char *detail = nullptr)
   dispatchTransportJson(payload);
 }
 
+void appendJsonEscaped(String &dest, const String &value)
+{
+  for (size_t i = 0; i < value.length(); ++i)
+  {
+    char c = value[i];
+    switch (c)
+    {
+    case '\\':
+    case '"':
+      dest += '\\';
+      dest += c;
+      break;
+    case '\b':
+      dest += F("\\b");
+      break;
+    case '\f':
+      dest += F("\\f");
+      break;
+    case '\n':
+      dest += F("\\n");
+      break;
+    case '\r':
+      dest += F("\\r");
+      break;
+    case '\t':
+      dest += F("\\t");
+      break;
+    default:
+      if (static_cast<uint8_t>(c) < 0x20)
+      {
+        char buffer[7];
+        snprintf(buffer, sizeof(buffer), "\\\\u%04x", static_cast<unsigned>(static_cast<uint8_t>(c)));
+        dest += buffer;
+      }
+      else
+      {
+        dest += c;
+      }
+      break;
+    }
+  }
+}
+
+void dispatchWifiState(const String &state, const String &ssid, const String &message)
+{
+  if (state.isEmpty())
+  {
+    return;
+  }
+
+  String payload = F("{\"event\":\"wifi_state\",\"state\":\"");
+  appendJsonEscaped(payload, state);
+  payload += F("\"");
+
+  if (!ssid.isEmpty())
+  {
+    payload += F(",\"ssid\":\"");
+    appendJsonEscaped(payload, ssid);
+    payload += F("\"");
+  }
+
+  if (!message.isEmpty())
+  {
+    payload += F(",\"message\":\"");
+    appendJsonEscaped(payload, message);
+    payload += F("\"");
+  }
+
+  payload += F("}");
+  dispatchTransportJson(payload);
+}
+
+void publishWifiState(const char *state, const char *ssid, const char *message)
+{
+  String nextState = state ? String(state) : String();
+  if (nextState.isEmpty())
+  {
+    if (ssid)
+    {
+      lastWifiSsid = String(ssid);
+    }
+    if (message)
+    {
+      lastWifiMessage = String(message);
+    }
+    lastWifiState = "";
+    return;
+  }
+
+  String nextSsid = ssid ? String(ssid) : lastWifiSsid;
+  if (!ssid && nextState == "connected")
+  {
+    String currentSsid = WiFi.SSID();
+    if (currentSsid.length())
+    {
+      nextSsid = currentSsid;
+    }
+  }
+
+  String nextMessage = message ? String(message) : lastWifiMessage;
+
+  if (nextState == lastWifiState && nextSsid == lastWifiSsid && nextMessage == lastWifiMessage)
+  {
+    return;
+  }
+
+  lastWifiState = nextState;
+  lastWifiSsid = nextSsid;
+  lastWifiMessage = nextMessage;
+  dispatchWifiState(lastWifiState, lastWifiSsid, lastWifiMessage);
+}
+
+void sendCachedWifiState()
+{
+  if (lastWifiState.isEmpty())
+  {
+    return;
+  }
+  dispatchWifiState(lastWifiState, lastWifiSsid, lastWifiMessage);
+}
+
+void appendWifiStateJson(JsonVariant doc)
+{
+  if (doc.isNull())
+  {
+    return;
+  }
+
+  doc["state"] = lastWifiState.isEmpty() ? "" : lastWifiState;
+
+  if (!lastWifiSsid.isEmpty())
+  {
+    doc["ssid"] = lastWifiSsid;
+  }
+  else
+  {
+    doc.remove("ssid");
+  }
+
+  if (!lastWifiMessage.isEmpty())
+  {
+    doc["message"] = lastWifiMessage;
+  }
+  else
+  {
+    doc.remove("message");
+  }
+}
+
 bool connectStationAndPersist(const String &ssid, const String &password, bool keepApActive)
 {
+  publishWifiState("connecting", ssid.c_str());
+
   if (!saveWifiCredentials(ssid, password))
   {
     sendStatusError("Failed to save WiFi credentials");
+    publishWifiState("failed", ssid.c_str(), "Failed to save WiFi credentials");
+    return false;
   }
 
   if (!connectToStation(ssid, password, keepApActive))
   {
+    publishWifiState("failed", ssid.c_str(), "Connection timed out");
     return false;
   }
 
@@ -1533,6 +1729,7 @@ bool connectStationAndPersist(const String &ssid, const String &password, bool k
     stopAccessPoint();
   }
   sendEvent("wifi_sta_connected", ssid.c_str());
+  publishWifiState("connected", ssid.c_str());
   return true;
 }
 
@@ -1546,16 +1743,53 @@ void processWifiStateMachine()
 
 void onWifiEvent(WiFiEvent_t event, WiFiEventInfo_t info)
 {
-  (void)info;
 #if defined(ESP_ARDUINO_VERSION_MAJOR) && ESP_ARDUINO_VERSION_MAJOR >= 2
-  if (event == ARDUINO_EVENT_WIFI_STA_GOT_IP)
-#else
-  if (event == SYSTEM_EVENT_STA_GOT_IP)
-#endif
+  switch (event)
+  {
+  case ARDUINO_EVENT_WIFI_STA_GOT_IP:
+    staConnectInProgress = false;
+    {
+      String ssid = WiFi.SSID();
+      publishWifiState("connected", ssid.c_str());
+    }
+    scheduleStaOnlyTransition();
+    break;
+  case ARDUINO_EVENT_WIFI_STA_DISCONNECTED:
   {
     staConnectInProgress = false;
-    scheduleStaOnlyTransition();
+    uint8_t reason = info.wifi_sta_disconnected.reason;
+    String message = F("Disconnect reason ");
+    message += String(reason);
+    publishWifiState("failed", nullptr, message.c_str());
+    break;
   }
+  default:
+    break;
+  }
+#else
+  switch (event)
+  {
+  case SYSTEM_EVENT_STA_GOT_IP:
+    staConnectInProgress = false;
+    {
+      String ssid = WiFi.SSID();
+      publishWifiState("connected", ssid.c_str());
+    }
+    scheduleStaOnlyTransition();
+    break;
+  case SYSTEM_EVENT_STA_DISCONNECTED:
+  {
+    staConnectInProgress = false;
+    uint8_t reason = info.disconnected.reason;
+    String message = F("Disconnect reason ");
+    message += String(reason);
+    publishWifiState("failed", nullptr, message.c_str());
+    break;
+  }
+  default:
+    break;
+  }
+#endif
 }
 
 bool lookupKeyCode(const String &token, uint8_t &code)
