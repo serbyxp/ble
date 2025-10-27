@@ -1727,16 +1727,22 @@ bool connectStationAndPersist(const String &ssid, const String &password, bool k
 {
   publishWifiState("connecting", ssid.c_str());
 
+  if (!connectToStation(ssid, password, keepApActive))
+  {
+    publishWifiState("failed", ssid.c_str(), "Connection timed out");
+    return false;
+  }
+
   if (!saveWifiCredentials(ssid, password))
   {
     sendStatusError("Failed to save WiFi credentials");
     publishWifiState("failed", ssid.c_str(), "Failed to save WiFi credentials");
-    return false;
-  }
-
-  if (!connectToStation(ssid, password, keepApActive))
-  {
-    publishWifiState("failed", ssid.c_str(), "Connection timed out");
+    if (keepApActive)
+    {
+      apShutdownPending = false;
+      wifiState = WifiState::ApSta;
+      wifiTargetMode = WIFI_MODE_APSTA;
+    }
     return false;
   }
 
