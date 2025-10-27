@@ -1400,8 +1400,9 @@
       });
 
       async function initialise() {
+        let wifiInitialisation = null;
         if (wifiSection) {
-          await loadWifiState();
+          wifiInitialisation = loadWifiState();
         }
         ensureWebsocket();
         try {
@@ -1416,6 +1417,11 @@
           logError(message);
         }
         updateOverlayState();
+        if (wifiInitialisation && typeof wifiInitialisation.finally === "function") {
+          wifiInitialisation.finally(() => {
+            updateOverlayState();
+          });
+        }
       }
 
       initialise();
