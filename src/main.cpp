@@ -334,8 +334,11 @@ void applyUartBaudRate(uint32_t baud)
 extern const uint8_t src_main_web_index_html_start[] asm("_binary_src_main_web_index_html_start");
 extern const uint8_t src_main_web_index_html_end[] asm("_binary_src_main_web_index_html_end");
 
-constexpr size_t CAPTIVE_PORTAL_INDEX_HTML_LENGTH = static_cast<size_t>(
-    src_main_web_index_html_end - src_main_web_index_html_start);
+size_t captivePortalIndexHtmlLength()
+{
+  return static_cast<size_t>(
+      src_main_web_index_html_end - src_main_web_index_html_start);
+}
 
 
 bool connectStationAndPersist(const String &ssid, const String &password, bool keepApActive);
@@ -669,7 +672,7 @@ esp_err_t sendPortalPage(httpd_req_t *req)
   httpd_resp_set_type(req, "text/html");
   return httpd_resp_send(req,
                          reinterpret_cast<const char *>(src_main_web_index_html_start),
-                         CAPTIVE_PORTAL_INDEX_HTML_LENGTH);
+                         captivePortalIndexHtmlLength());
 }
 
 esp_err_t sendJsonResponse(httpd_req_t *req, int statusCode, const JsonDocument &doc)
