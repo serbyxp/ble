@@ -366,7 +366,7 @@
   <section id="wifi-section">
     <fieldset class="wifi-layout">
       <legend>Wi-Fi Setup</legend>
-      <p id="wifi-status" class="wifi-status">Scan to find available Wi-Fi networks.</p>
+      <p id="wifi-status" class="wifi-status">Scan to find available Wi-Fi networks. The configuration access point stays online while you connect.</p>
       <div id="wifi-network-list" class="wifi-network-list">
         <div class="empty">No scan results yet.</div>
       </div>
@@ -554,7 +554,8 @@
       let videoPlaying = false;
       let wifiScanInProgress = false;
       let wifiConnectInProgress = false;
-      let wifiStateData = { state: "", ssid: "", message: "" };
+      let wifiStateData = { state: "", rawState: "", ssid: "", message: "" };
+      const connectedWifiStates = new Set(["connected", "ap_sta"]);
 
       const mouseButtonMap = ["left", "middle", "right", "back", "forward"];
 
@@ -564,53 +565,128 @@
         wifiStatus.classList.toggle("error", Boolean(isError));
       }
 
-      function updateWifiControls() {
+      function updateWifiControls(stateOverride) {
+        const state = stateOverride || wifiStateData.state;
         if (wifiRefreshButton) {
           wifiRefreshButton.disabled = wifiScanInProgress || wifiConnectInProgress;
         }
         if (wifiConnectButton) {
+          const isConnected = connectedWifiStates.has(state);
           wifiConnectButton.disabled = wifiConnectInProgress;
+          wifiConnectButton.classList.toggle("active", isConnected && !wifiConnectInProgress);
+          if (wifiConnectInProgress) {
+            wifiConnectButton.textContent = "Connecting…";
+          } else {
+            wifiConnectButton.textContent = isConnected ? "Connected" : "Connect";
+          }
         }
       }
 
+      function normalizeWifiState(state) {
+        if (!state) return "";
+        const lowered = state.trim().toLowerCase();
+        if (!lowered) return "";
+        if (lowered === "ap+sta" || lowered === "ap_sta" || lowered === "apsta") {
+          return "ap_sta";
+        }
+        if (lowered === "ap-only" || lowered === "ap_only") {
+          return "ap";
+        }
+        return lowered;
+      }
+
       function applyWifiState() {
-        const { state, ssid, message } = wifiStateData;
-        if (state === "connecting") {
+        const { state, rawState, ssid, message } = wifiStateData;
+        const effectiveState = state || normalizeWifiState(rawState);
+        let statusMessage = message || "";
+        let isError = false;
+
+        if (effectiveState === "connecting") {
           wifiConnectInProgress = true;
-          const label = ssid ? `Connecting to ${ssid}…` : "Connecting…";
-          setWifiStatus(label);
-        } else if (state === "connected") {
+          statusMessage =
+            statusMessage ||
+            (ssid
+              ? `Connecting to ${ssid}. The configuration access point will stay online until the link is stable.`
+              : "Connecting to Wi-Fi. The configuration access point will stay online until the link is stable.");
+        } else if (effectiveState === "connected") {
           wifiConnectInProgress = false;
-          if (message) {
-            setWifiStatus(message);
-          } else {
-            const label = ssid ? `Connected to ${ssid}.` : "Connected to Wi-Fi.";
-            setWifiStatus(label);
-          }
-        } else if (state === "failed") {
+          statusMessage =
+            statusMessage ||
+            (ssid
+              ? `Connected to ${ssid}. The configuration access point will turn off after a short delay to free the radio.`
+              : "Connected to Wi-Fi. The configuration access point will turn off after a short delay to free the radio.");
+        } else if (effectiveState === "ap_sta") {
           wifiConnectInProgress = false;
-          const errorText = message || (ssid ? `Failed to connect to ${ssid}.` : "Failed to connect.");
-          setWifiStatus(errorText, true);
+          statusMessage =
+            statusMessage ||
+            (ssid
+              ? `Connected to ${ssid} while the configuration access point remains available briefly for existing clients.`
+              : "Station connection active while the configuration access point remains available briefly for existing clients.");
+        } else if (effectiveState === "ap") {
+          wifiConnectInProgress = false;
+          statusMessage =
+            statusMessage ||
+            (ssid
+              ? `Configuration access point “${ssid}” is active. Join it to set up another network.`
+              : "Configuration access point is active. Join it to set up another network.");
+        } else if (effectiveState === "failed") {
+          wifiConnectInProgress = false;
+          isError = true;
+          statusMessage =
+            statusMessage ||
+            (ssid
+              ? `Failed to connect to ${ssid}. The configuration access point is still available so you can try again.`
+              : "Failed to connect. The configuration access point is still available so you can try again.");
+        } else if (effectiveState === "disconnected") {
+          wifiConnectInProgress = false;
+          isError = true;
+          statusMessage =
+            statusMessage ||
+            (ssid
+              ? `Lost connection to ${ssid}. The configuration access point has been re-enabled for recovery.`
+              : "Wi-Fi connection lost. The configuration access point has been re-enabled for recovery.");
+        } else if (effectiveState === "idle") {
+          wifiConnectInProgress = false;
+          statusMessage =
+            statusMessage ||
+            "Wi-Fi is idle. Scan for networks or enter an SSID to connect.";
         } else {
           wifiConnectInProgress = false;
+          if (!statusMessage && rawState) {
+            statusMessage = `Wi-Fi state: ${rawState}.`;
+          }
         }
-        updateWifiControls();
+
+        if (!statusMessage) {
+          statusMessage = "Wi-Fi status unavailable.";
+        }
+
+        setWifiStatus(statusMessage, isError);
+        updateWifiControls(effectiveState);
       }
 
       function updateWifiStateFromPayload(payload) {
         if (!payload || typeof payload !== "object") return false;
         const state = typeof payload.state === "string" ? payload.state : "";
-        if (!state) return false;
+        if (!state && !payload.message) {
+          return false;
+        }
+        const normalized = normalizeWifiState(state);
         const ssid = typeof payload.ssid === "string" ? payload.ssid : wifiStateData.ssid;
         const message = typeof payload.message === "string" ? payload.message : "";
-        wifiStateData = { state, ssid, message };
+        wifiStateData = { state: normalized, rawState: state, ssid, message };
         applyWifiState();
         return true;
       }
 
       function handleEventMessage(data) {
         if (!data || typeof data !== "object") return false;
-        const eventName = typeof data.event === "string" ? data.event : "";
+        const eventName =
+          typeof data.event === "string"
+            ? data.event
+            : typeof data.type === "string"
+            ? data.type
+            : "";
         if (!eventName) return false;
         if (eventName === "wifi_state") {
           updateWifiStateFromPayload(data);
@@ -668,12 +744,28 @@
         try {
           const response = await fetch("/api/wifi/state", { headers: { Accept: "application/json" } });
           if (!response.ok) {
-            return;
+            setWifiStatus("Unable to query Wi-Fi status. The configuration access point may still be active.", true);
+            wifiConnectInProgress = false;
+            updateWifiControls();
+            return null;
           }
           const data = await response.json().catch(() => ({}));
-          updateWifiStateFromPayload(data);
+          const handled = updateWifiStateFromPayload(data);
+          if (!handled) {
+            const fallback =
+              (data && typeof data.message === "string" && data.message) ||
+              "Wi-Fi status unavailable.";
+            setWifiStatus(fallback, Boolean(data && data.status === "error"));
+            wifiConnectInProgress = false;
+            updateWifiControls();
+          }
+          return data;
         } catch (error) {
           console.warn("Failed to load Wi-Fi state", error);
+          setWifiStatus("Unable to reach the Wi-Fi manager. The configuration access point may still be active.", true);
+          wifiConnectInProgress = false;
+          updateWifiControls();
+          return null;
         }
       }
 
@@ -681,7 +773,7 @@
         if (!wifiRefreshButton) return;
         wifiScanInProgress = true;
         updateWifiControls();
-        setWifiStatus("Scanning for networks…");
+        setWifiStatus("Scanning for networks… The configuration access point stays online while this completes.");
         try {
           const response = await fetch("/scan", { headers: { Accept: "application/json" } });
           if (!response.ok) {
@@ -692,13 +784,20 @@
           networks.sort((a, b) => (b.rssi ?? -100) - (a.rssi ?? -100));
           renderWifiNetworks(networks);
           if (networks.length) {
-            setWifiStatus("Select a network or enter an SSID manually.");
+            setWifiStatus(
+              "Select a network or enter an SSID manually. The configuration access point stays online while you connect."
+            );
           } else {
-            setWifiStatus("No networks found. You can enter an SSID manually or rescan.");
+            setWifiStatus(
+              "No networks found. You can enter an SSID manually or rescan. The configuration access point remains available for setup."
+            );
           }
         } catch (error) {
           console.error(error);
-          setWifiStatus(`Scan failed: ${error instanceof Error ? error.message : String(error)}`, true);
+          setWifiStatus(
+            `Scan failed: ${error instanceof Error ? error.message : String(error)}. The configuration access point is still available for manual setup.`,
+            true
+          );
           if (wifiNetworkList) {
             wifiNetworkList.innerHTML = "";
             const empty = document.createElement("div");
@@ -714,7 +813,7 @@
 
       async function configureWifi(ssid, password) {
         if (!wifiConnectButton || !ssid) return;
-        wifiStateData = { state: "connecting", ssid, message: "" };
+        wifiStateData = { state: "connecting", rawState: "connecting", ssid, message: "" };
         applyWifiState();
         let hasWifiState = false;
         try {
@@ -732,8 +831,9 @@
           if (!hasWifiState) {
             wifiStateData = {
               state: "connected",
+              rawState: "connected",
               ssid,
-              message: `Connected to ${ssid}. The ESP32 will attempt to join the network.`
+              message: `Connected to ${ssid}. The ESP32 will keep its access point online briefly while the station link settles.`
             };
             applyWifiState();
           }
@@ -743,8 +843,9 @@
             const reason = error instanceof Error ? error.message : String(error);
             wifiStateData = {
               state: "failed",
+              rawState: "failed",
               ssid,
-              message: `Connection failed: ${reason}`
+              message: `Connection failed: ${reason}. The configuration access point remains available so you can retry.`
             };
             applyWifiState();
           }
@@ -769,7 +870,10 @@
               ssid = selected.value;
             }
             if (!ssid) {
-              setWifiStatus("Choose a network or enter an SSID.", true);
+              setWifiStatus(
+                "Choose a network or enter an SSID. The configuration access point stays active while you decide.",
+                true
+              );
               if (wifiCustomSsid) {
                 wifiCustomSsid.focus();
               }
@@ -791,7 +895,6 @@
           });
         }
 
-        loadWifiState();
         loadWifiNetworks();
       }
 
@@ -1297,6 +1400,9 @@
       });
 
       async function initialise() {
+        if (wifiSection) {
+          await loadWifiState();
+        }
         ensureWebsocket();
         try {
           const config = await apiGet("/api/config");
