@@ -1,7 +1,6 @@
 #include <Arduino.h>
 #include <BleCombo.h>
 #include <ArduinoJson.h>
-#include <DNSServer.h>
 #include <esp_http_server.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/queue.h>
@@ -10,7 +9,6 @@
 #include <sdkconfig.h>
 #endif
 #include <WiFi.h>
-#include <esp_wifi.h>
 #include <nvs.h>
 #include <nvs_flash.h>
 #include <pgmspace.h>
@@ -22,6 +20,8 @@
 #include <vector>
 #include <cstdio>
 
+#include "wifi_manager.h"
+
 namespace
 {
   constexpr size_t JSON_DOC_CAPACITY = 512;
@@ -29,26 +29,12 @@ namespace
   constexpr size_t MAX_KEY_COMBO = 8;
   constexpr uint8_t MOUSE_ALL_BUTTONS = MOUSE_LEFT | MOUSE_RIGHT | MOUSE_MIDDLE | MOUSE_BACK | MOUSE_FORWARD;
   constexpr uint16_t DEFAULT_CHAR_DELAY_MS = 6;
-  constexpr const char *NVS_NAMESPACE_WIFI = "wifi";
-  constexpr const char *NVS_KEY_SSID = "ssid";
-  constexpr const char *NVS_KEY_PASS = "password";
   constexpr const char *NVS_NAMESPACE_TRANSPORT = "transport";
   constexpr const char *NVS_KEY_TRANSPORT_MODE = "mode";
   constexpr const char *NVS_KEY_UART_BAUD = "baud";
   constexpr uint32_t DEFAULT_UART_BAUD = 115200;
-  constexpr unsigned long WIFI_CONNECT_TIMEOUT_MS = 20000;
-  constexpr unsigned long WIFI_RETRY_DELAY_MS = 500;
-  constexpr unsigned long WIFI_AP_SHUTDOWN_DELAY_MS = 3000;
-  constexpr const char *CONFIG_AP_SSID = "uhid-setup";
-  constexpr const char *CONFIG_AP_PASSWORD = "uhid1234";
-  constexpr size_t WIFI_MAX_SSID_LENGTH = 32;
-  constexpr size_t WIFI_MAX_PASSWORD_LENGTH = 64;
-  constexpr uint16_t DNS_PORT = 53;
   constexpr uint16_t HTTP_PORT = 80;
   constexpr const char *HTTP_STATUS_SERVICE_UNAVAILABLE = "503 Service Unavailable";
-
-  DNSServer dnsServer;
-  bool dnsServerActive = false;
 
 #if defined(CONFIG_BT_NIMBLE_PINNED_TO_CORE)
   constexpr BaseType_t kHttpTaskCore = (CONFIG_BT_NIMBLE_PINNED_TO_CORE == 0) ? 1 : 0;
@@ -64,13 +50,6 @@ namespace
   {
     size_t length;
     char payload[INPUT_BUFFER_LIMIT];
-  };
-
-  struct WifiConnectRequest
-  {
-    bool keepApActive;
-    char ssid[WIFI_MAX_SSID_LENGTH + 1];
-    char password[WIFI_MAX_PASSWORD_LENGTH + 1];
   };
 
   constexpr UBaseType_t TRANSPORT_COMMAND_QUEUE_LENGTH = 8;
@@ -93,7 +72,6 @@ namespace
   void startTransportPumpTask();
   void wifiConnectTask(void *param);
   bool ensureTransportQueues();
-  bool ensureWifiConnectTask();
   void closeActiveWebsocket();
   void resetTransportQueues();
   bool applyTransportMode(TransportMode mode);
@@ -106,9 +84,6 @@ namespace
   void sendStatusOk();
   void sendStatusError(const char *message);
   void sendEvent(const char *name, const char *detail = nullptr);
-  void publishWifiState(const char *state, const char *ssid = nullptr, const char *message = "");
-  void sendCachedWifiState();
-  void appendWifiStateJson(JsonVariant doc);
   esp_err_t handleWifiStateGet(httpd_req_t *req);
   void applyUartBaudRate(uint32_t baud);
   void flushInputBuffer();
@@ -118,8 +93,6 @@ namespace
   QueueHandle_t transportEventQueue = nullptr;
   TaskHandle_t httpServerTaskHandle = nullptr;
   TaskHandle_t transportPumpTaskHandle = nullptr;
-  QueueHandle_t wifiConnectRequestQueue = nullptr;
-  TaskHandle_t wifiConnectTaskHandle = nullptr;
   httpd_handle_t httpServerHandle = nullptr;
   volatile int wsClientSocket = -1;
 
@@ -189,42 +162,6 @@ namespace
     return transportCommandQueue != nullptr && transportEventQueue != nullptr;
   }
 
-  bool ensureWifiConnectTask()
-  {
-    if (!wifiConnectRequestQueue)
-    {
-      wifiConnectRequestQueue = xQueueCreate(1, sizeof(WifiConnectRequest));
-    }
-
-    if (!wifiConnectRequestQueue)
-    {
-      return false;
-    }
-
-    if (!wifiConnectTaskHandle)
-    {
-      constexpr uint32_t stackSize = 4096;
-      constexpr UBaseType_t priority = tskIDLE_PRIORITY + 1;
-#if defined(CONFIG_FREERTOS_UNICORE) && CONFIG_FREERTOS_UNICORE
-      if (xTaskCreate(wifiConnectTask, "wifi_connect", stackSize, nullptr, priority, &wifiConnectTaskHandle) != pdPASS)
-#else
-      if (xTaskCreatePinnedToCore(wifiConnectTask,
-                                  "wifi_connect",
-                                  stackSize,
-                                  nullptr,
-                                  priority,
-                                  &wifiConnectTaskHandle,
-                                  kHttpTaskCore) != pdPASS)
-#endif
-      {
-        wifiConnectTaskHandle = nullptr;
-        return false;
-      }
-    }
-
-    return true;
-  }
-
   void closeActiveWebsocket()
   {
     if (httpServerHandle && wsClientSocket >= 0)
@@ -244,43 +181,6 @@ namespace
     {
       xQueueReset(transportEventQueue);
     }
-  }
-
-  bool scheduleWifiConnect(const String &ssid, const String &password, bool keepApActive)
-  {
-    if (ssid.isEmpty())
-    {
-      return false;
-    }
-
-    if (wifiConnectBusy.load())
-    {
-      return false;
-    }
-
-    if (!ensureWifiConnectTask())
-    {
-      return false;
-    }
-
-    WifiConnectRequest request = {};
-    request.keepApActive = keepApActive;
-
-    String limitedSsid = ssid;
-    if (limitedSsid.length() > WIFI_MAX_SSID_LENGTH)
-    {
-      limitedSsid = limitedSsid.substring(0, static_cast<int>(WIFI_MAX_SSID_LENGTH));
-    }
-    limitedSsid.toCharArray(request.ssid, sizeof(request.ssid));
-
-    String limitedPassword = password;
-    if (limitedPassword.length() > WIFI_MAX_PASSWORD_LENGTH)
-    {
-      limitedPassword = limitedPassword.substring(0, static_cast<int>(WIFI_MAX_PASSWORD_LENGTH));
-    }
-    limitedPassword.toCharArray(request.password, sizeof(request.password));
-
-    return xQueueSend(wifiConnectRequestQueue, &request, 0) == pdPASS;
   }
 
   const char *transportModeToString(TransportMode mode)
@@ -428,33 +328,9 @@ namespace
         src_web_index_html_end - src_web_index_html_start);
   }
 
-  bool connectStationAndPersist(const String &ssid, const String &password, bool keepApActive);
-  void startAccessPoint();
 
   String inputBuffer;
   bool lastBleConnectionState = false;
-  bool configurationMode = false;
-  String lastWifiState;
-  String lastWifiSsid;
-  String lastWifiMessage;
-
-  enum class WifiState : uint8_t
-  {
-    ApOnly,
-    ApSta,
-    TransitioningToSta,
-    StaOnly
-  };
-
-  WifiState wifiState = WifiState::ApOnly;
-  wifi_mode_t wifiCurrentMode = WIFI_MODE_NULL;
-  wifi_mode_t wifiTargetMode = WIFI_MODE_AP;
-  wifi_mode_t wifiModeBeforeTemporarySta = WIFI_MODE_NULL;
-  bool temporaryApStaMode = false;
-  bool apShutdownPending = false;
-  unsigned long apShutdownDeadline = 0;
-  bool staConnectInProgress = false;
-  std::atomic<bool> wifiConnectBusy{false};
 
 
   struct NamedCode
@@ -615,120 +491,6 @@ namespace
     return err == ESP_OK;
   }
 
-  bool loadWifiCredentials(String &ssid, String &password)
-  {
-    nvs_handle_t handle;
-    esp_err_t err = nvs_open(NVS_NAMESPACE_WIFI, NVS_READONLY, &handle);
-    if (err != ESP_OK)
-    {
-      return false;
-    }
-
-    size_t ssidLength = 0;
-    err = nvs_get_str(handle, NVS_KEY_SSID, nullptr, &ssidLength);
-    if (err != ESP_OK || ssidLength <= 1)
-    {
-      nvs_close(handle);
-      return false;
-    }
-
-    std::vector<char> ssidBuffer(ssidLength);
-    err = nvs_get_str(handle, NVS_KEY_SSID, ssidBuffer.data(), &ssidLength);
-    if (err != ESP_OK)
-    {
-      nvs_close(handle);
-      return false;
-    }
-
-    size_t passwordLength = 0;
-    err = nvs_get_str(handle, NVS_KEY_PASS, nullptr, &passwordLength);
-    if (err == ESP_ERR_NVS_NOT_FOUND)
-    {
-      passwordLength = 1;
-    }
-    else if (err != ESP_OK)
-    {
-      nvs_close(handle);
-      return false;
-    }
-
-    std::vector<char> passwordBuffer(passwordLength);
-    if (passwordLength > 1)
-    {
-      err = nvs_get_str(handle, NVS_KEY_PASS, passwordBuffer.data(), &passwordLength);
-      if (err != ESP_OK)
-      {
-        nvs_close(handle);
-        return false;
-      }
-    }
-    else
-    {
-      passwordBuffer[0] = '\0';
-    }
-
-    nvs_close(handle);
-
-    ssid = String(ssidBuffer.data());
-    password = String(passwordBuffer.data());
-    return true;
-  }
-
-  bool saveWifiCredentials(const String &ssid, const String &password)
-  {
-    nvs_handle_t handle;
-    esp_err_t err = nvs_open(NVS_NAMESPACE_WIFI, NVS_READWRITE, &handle);
-    if (err != ESP_OK)
-    {
-      return false;
-    }
-
-    err = nvs_set_str(handle, NVS_KEY_SSID, ssid.c_str());
-    if (err != ESP_OK)
-    {
-      nvs_close(handle);
-      return false;
-    }
-
-    err = nvs_set_str(handle, NVS_KEY_PASS, password.c_str());
-    if (err != ESP_OK)
-    {
-      nvs_close(handle);
-      return false;
-    }
-
-    err = nvs_commit(handle);
-    nvs_close(handle);
-    return err == ESP_OK;
-  }
-
-  const char *wifiAuthModeToString(wifi_auth_mode_t mode)
-  {
-    switch (mode)
-    {
-    case WIFI_AUTH_OPEN:
-      return "open";
-    case WIFI_AUTH_WEP:
-      return "wep";
-    case WIFI_AUTH_WPA_PSK:
-      return "wpa_psk";
-    case WIFI_AUTH_WPA2_PSK:
-      return "wpa2_psk";
-    case WIFI_AUTH_WPA_WPA2_PSK:
-      return "wpa_wpa2_psk";
-    case WIFI_AUTH_WPA2_ENTERPRISE:
-      return "wpa2_enterprise";
-    case WIFI_AUTH_WPA3_PSK:
-      return "wpa3_psk";
-    case WIFI_AUTH_WPA2_WPA3_PSK:
-      return "wpa2_wpa3_psk";
-    case WIFI_AUTH_WAPI_PSK:
-      return "wapi_psk";
-    default:
-      return "unknown";
-    }
-  }
-
   void setNoCacheHeaders(httpd_req_t *req)
   {
     httpd_resp_set_hdr(req, "Cache-Control", "no-store, no-cache, must-revalidate");
@@ -778,213 +540,6 @@ namespace
     return httpd_resp_send(req, payload.c_str(), HTTPD_RESP_USE_STRLEN);
   }
 
-  void startCaptivePortalServices()
-  {
-    if (dnsServerActive)
-    {
-      dnsServer.stop();
-    }
-
-    dnsServer.setErrorReplyCode(DNSReplyCode::NoError);
-    IPAddress apIp = WiFi.softAPIP();
-    dnsServer.start(DNS_PORT, "*", apIp);
-    dnsServerActive = true;
-  }
-
-  void stopCaptivePortalServices()
-  {
-    if (dnsServerActive)
-    {
-      dnsServer.stop();
-      dnsServerActive = false;
-    }
-  }
-
-  bool isApMode(wifi_mode_t mode)
-  {
-    return mode == WIFI_MODE_AP || mode == WIFI_MODE_APSTA;
-  }
-
-  bool ensureWifiStarted();
-
-  void setWifiModeTracked(wifi_mode_t mode)
-  {
-    if (wifiCurrentMode == mode)
-    {
-      return;
-    }
-
-    bool success = false;
-    if (wifiCurrentMode == WIFI_MODE_NULL)
-    {
-      success = WiFi.mode(mode);
-    }
-    else
-    {
-      esp_err_t err = esp_wifi_set_mode(mode);
-      if (err == ESP_OK)
-      {
-        success = true;
-      }
-      else
-      {
-        success = WiFi.mode(mode);
-      }
-    }
-
-    if (!success)
-    {
-      wifi_mode_t actual = WIFI_MODE_NULL;
-      if (esp_wifi_get_mode(&actual) == ESP_OK)
-      {
-        wifiCurrentMode = actual;
-      }
-      else
-      {
-        wifiCurrentMode = WIFI_MODE_NULL;
-      }
-      return;
-    }
-
-    wifi_mode_t actual = WIFI_MODE_NULL;
-    if (esp_wifi_get_mode(&actual) == ESP_OK)
-    {
-      wifiCurrentMode = actual;
-    }
-    else
-    {
-      wifiCurrentMode = mode;
-    }
-  }
-
-  bool ensureWifiStarted()
-  {
-    wifi_mode_t currentMode = WIFI_MODE_NULL;
-    if (esp_wifi_get_mode(&currentMode) == ESP_OK)
-    {
-      wifiCurrentMode = currentMode;
-    }
-
-    if (wifiCurrentMode == WIFI_MODE_NULL)
-    {
-      return false;
-    }
-
-    esp_err_t err = esp_wifi_start();
-    if (err == ESP_OK || err == ESP_ERR_WIFI_STATE)
-    {
-      return true;
-    }
-
-    if (err == ESP_ERR_WIFI_NOT_INIT)
-    {
-      if (!WiFi.mode(wifiCurrentMode))
-      {
-        wifiCurrentMode = WIFI_MODE_NULL;
-        return false;
-      }
-      err = esp_wifi_start();
-      return err == ESP_OK || err == ESP_ERR_WIFI_STATE;
-    }
-
-    return false;
-  }
-
-  void ensureApOnlyMode()
-  {
-    temporaryApStaMode = false;
-    wifiTargetMode = WIFI_MODE_AP;
-    wifiState = WifiState::ApOnly;
-    setWifiModeTracked(WIFI_MODE_AP);
-  }
-
-  void ensureStaOnlyMode()
-  {
-    temporaryApStaMode = false;
-    wifiTargetMode = WIFI_MODE_STA;
-    wifiState = WifiState::StaOnly;
-    setWifiModeTracked(WIFI_MODE_STA);
-  }
-
-  void requestApStaMode(bool temporary)
-  {
-    if (temporary)
-    {
-      wifiModeBeforeTemporarySta = wifiCurrentMode;
-      if (wifiModeBeforeTemporarySta == WIFI_MODE_STA)
-      {
-        wifiTargetMode = WIFI_MODE_STA;
-      }
-      else
-      {
-        wifiTargetMode = WIFI_MODE_AP;
-      }
-    }
-    else
-    {
-      wifiModeBeforeTemporarySta = WIFI_MODE_NULL;
-      wifiTargetMode = WIFI_MODE_STA;
-    }
-    setWifiModeTracked(WIFI_MODE_APSTA);
-    wifiState = WifiState::ApSta;
-    temporaryApStaMode = temporary;
-  }
-
-  void restoreApModeAfterTemporarySta()
-  {
-    if (temporaryApStaMode && wifiState == WifiState::ApSta)
-    {
-      if (wifiModeBeforeTemporarySta == WIFI_MODE_STA)
-      {
-        ensureStaOnlyMode();
-      }
-      else
-      {
-        ensureApOnlyMode();
-      }
-      wifiModeBeforeTemporarySta = WIFI_MODE_NULL;
-    }
-  }
-
-  void shutdownAccessPoint()
-  {
-    wifi_mode_t mode = WIFI_MODE_NULL;
-    esp_wifi_get_mode(&mode);
-    if (!isApMode(mode))
-    {
-      ensureStaOnlyMode();
-      configurationMode = false;
-      return;
-    }
-
-    WiFi.softAPdisconnect(true);
-    stopCaptivePortalServices();
-    ensureStaOnlyMode();
-    configurationMode = false;
-  }
-
-  void scheduleStaOnlyTransition()
-  {
-    if (wifiState != WifiState::ApSta || temporaryApStaMode)
-    {
-      return;
-    }
-    apShutdownPending = true;
-    apShutdownDeadline = millis() + WIFI_AP_SHUTDOWN_DELAY_MS;
-    wifiState = WifiState::TransitioningToSta;
-    wifiTargetMode = WIFI_MODE_STA;
-  }
-
-  void finalizeStaOnlyTransition()
-  {
-    if (!apShutdownPending)
-    {
-      return;
-    }
-    apShutdownPending = false;
-    shutdownAccessPoint();
-  }
-
   esp_err_t handleIndex(httpd_req_t *req)
   {
     return sendPortalPage(req);
@@ -992,7 +547,7 @@ namespace
 
   esp_err_t handleHttp404(httpd_req_t *req, httpd_err_code_t)
   {
-    if (configurationMode)
+    if (wifi_manager::is_configuration_mode())
     {
       return sendPortalPage(req);
     }
@@ -1005,46 +560,25 @@ namespace
 
   esp_err_t handleScan(httpd_req_t *req)
   {
-    requestApStaMode(true);
-
-    if (!ensureWifiStarted())
-    {
-      restoreApModeAfterTemporarySta();
-      JsonDocument response;
-      auto obj = response.to<JsonObject>();
-      obj["status"] = "error";
-      obj["message"] = "WiFi interface not ready";
-      return sendJsonResponse(req, 503, response);
-    }
-
-    int16_t networkCount = WiFi.scanNetworks(/*async=*/false, /*show_hidden=*/false, /*passive=*/false);
-    if (networkCount < 0)
-    {
-      restoreApModeAfterTemporarySta();
-      JsonDocument response;
-      auto obj = response.to<JsonObject>();
-      obj["status"] = "error";
-      obj["message"] = "Scan failed";
-      obj["code"] = static_cast<int>(networkCount);
-      return sendJsonResponse(req, 500, response);
-    }
-
-    const size_t maxNetworks = 20;
     JsonDocument doc;
     auto obj = doc.to<JsonObject>();
     JsonArray networks = obj["networks"].to<JsonArray>();
-
-    for (int16_t index = 0; index < networkCount && index < static_cast<int16_t>(maxNetworks); ++index)
+    String errorMessage;
+    int errorCode = 0;
+    if (!wifi_manager::scan_networks(networks, errorMessage, errorCode))
     {
-      JsonObject network = networks.add<JsonObject>();
-      network["ssid"] = WiFi.SSID(index);
-      network["rssi"] = WiFi.RSSI(index);
-      network["channel"] = WiFi.channel(index);
-      network["auth"] = wifiAuthModeToString(static_cast<wifi_auth_mode_t>(WiFi.encryptionType(index)));
+      JsonDocument response;
+      auto errorObj = response.to<JsonObject>();
+      errorObj["status"] = "error";
+      errorObj["message"] = errorMessage;
+      if (errorCode != 0)
+      {
+        errorObj["code"] = errorCode;
+      }
+      int status = (errorCode == 0) ? 503 : 500;
+      return sendJsonResponse(req, status, response);
     }
 
-    WiFi.scanDelete();
-    restoreApModeAfterTemporarySta();
     obj["status"] = "ok";
     return sendJsonResponse(req, 200, doc);
   }
@@ -1115,12 +649,16 @@ namespace
       return sendJsonResponse(req, 400, response);
     }
 
-    if (!configurationMode)
+    if (!wifi_manager::is_configuration_mode())
     {
-      startAccessPoint();
+      wifi_manager::start_ap();
+      if (wifi_manager::is_configuration_mode())
+      {
+        sendEvent("wifi_config_mode");
+      }
     }
 
-    if (wifiConnectBusy.load() || (wifiConnectRequestQueue && uxQueueMessagesWaiting(wifiConnectRequestQueue) > 0))
+    if (!wifi_manager::schedule_connect(ssid, password, false))
     {
       JsonDocument response;
       auto obj = response.to<JsonObject>();
@@ -1129,22 +667,13 @@ namespace
       return sendJsonResponse(req, 409, response);
     }
 
-    if (!scheduleWifiConnect(ssid, password, false))
-    {
-      JsonDocument response;
-      auto obj = response.to<JsonObject>();
-      obj["status"] = "error";
-      obj["message"] = "Unable to schedule WiFi connection";
-      return sendJsonResponse(req, 503, response);
-    }
-
-    publishWifiState("connecting", ssid.c_str());
     sendEvent("wifi_connecting", ssid.c_str());
 
     JsonDocument response;
     auto obj = response.to<JsonObject>();
     obj["status"] = "ok";
-    appendWifiStateJson(obj);
+    wifi_manager::append_state_json(obj);
+    obj["state"] = "connecting";
     if (!obj["ssid"].is<const char *>() || obj["ssid"].as<const char *>()[0] == '\0')
     {
       obj["ssid"] = ssid;
@@ -1162,7 +691,7 @@ namespace
     JsonDocument doc;
     auto obj = doc.to<JsonObject>();
     obj["status"] = "ok";
-    appendWifiStateJson(obj);
+    wifi_manager::append_state_json(obj);
     return sendJsonResponse(req, 200, doc);
   }
 
@@ -1421,7 +950,7 @@ namespace
     if (req->method == HTTP_GET)
     {
       wsClientSocket = httpd_req_to_sockfd(req);
-      sendCachedWifiState();
+      wifi_manager::send_cached_state();
       return ESP_OK;
     }
 
@@ -1646,156 +1175,6 @@ namespace
 #endif
   }
 
-  void wifiConnectTask(void *param)
-  {
-    (void)param;
-
-    for (;;)
-    {
-      WifiConnectRequest request = {};
-      if (wifiConnectRequestQueue &&
-          xQueueReceive(wifiConnectRequestQueue, &request, portMAX_DELAY) == pdPASS)
-      {
-        String ssid = String(request.ssid);
-        String password = String(request.password);
-        bool keepApActive = request.keepApActive;
-
-        wifiConnectBusy.store(true);
-
-        // Give the HTTP handler a moment to finish responding before
-        // altering the WiFi state, so the client reliably receives the
-        // acknowledgement.
-        vTaskDelay(pdMS_TO_TICKS(500));
-
-        bool connected = connectStationAndPersist(ssid, password, keepApActive);
-        wifiConnectBusy.store(false);
-        if (!connected && !keepApActive)
-        {
-          startAccessPoint();
-          if (configurationMode)
-          {
-            sendEvent("wifi_config_mode");
-          }
-        }
-      }
-    }
-  }
-
-  void stopAccessPoint()
-  {
-    apShutdownPending = false;
-    shutdownAccessPoint();
-  }
-
-  void startAccessPoint()
-  {
-    apShutdownPending = false;
-    ensureApOnlyMode();
-
-    auto reportApFailure = [](const char *message) {
-      stopCaptivePortalServices();
-      WiFi.softAPdisconnect(true);
-      configurationMode = false;
-      if (message && *message)
-      {
-        publishWifiState("failed", nullptr, message);
-        sendStatusError(message);
-      }
-    };
-
-    if (!ensureWifiStarted())
-    {
-      reportApFailure("Failed to start WiFi for access point");
-      return;
-    }
-
-    IPAddress localIp(192, 168, 4, 1);
-    IPAddress gateway(192, 168, 4, 1);
-    IPAddress subnet(255, 255, 255, 0);
-
-    if (!WiFi.softAPConfig(localIp, gateway, subnet))
-    {
-      reportApFailure("Failed to configure access point network");
-      return;
-    }
-
-    if (!WiFi.softAP(CONFIG_AP_SSID, CONFIG_AP_PASSWORD))
-    {
-      reportApFailure("Failed to start access point");
-      return;
-    }
-
-    startCaptivePortalServices();
-    configurationMode = true;
-  }
-
-  bool connectToStation(const String &ssid, const String &password, bool keepApActive)
-  {
-    if (ssid.isEmpty())
-    {
-      return false;
-    }
-
-    apShutdownPending = false;
-    if (keepApActive)
-    {
-      requestApStaMode(false);
-    }
-    else
-    {
-      shutdownAccessPoint();
-    }
-    WiFi.persistent(false);
-    WiFi.setAutoReconnect(true);
-
-    if (!ensureWifiStarted())
-    {
-      if (keepApActive)
-      {
-        startAccessPoint();
-      }
-      else
-      {
-        WiFi.disconnect();
-      }
-      return false;
-    }
-    WiFi.begin(ssid.c_str(), password.c_str());
-
-    staConnectInProgress = true;
-    unsigned long startAttempt = millis();
-    while ((millis() - startAttempt) < WIFI_CONNECT_TIMEOUT_MS)
-    {
-      wl_status_t status = WiFi.status();
-      if (status == WL_CONNECTED)
-      {
-        staConnectInProgress = false;
-        if (!keepApActive)
-        {
-          configurationMode = false;
-        }
-        return true;
-      }
-      if (status == WL_CONNECT_FAILED || status == WL_CONNECTION_LOST || status == WL_DISCONNECTED)
-      {
-        WiFi.reconnect();
-      }
-      delay(WIFI_RETRY_DELAY_MS);
-    }
-
-    staConnectInProgress = false;
-    if (keepApActive)
-    {
-      esp_wifi_disconnect();
-      startAccessPoint();
-    }
-    else
-    {
-      WiFi.disconnect();
-    }
-    return false;
-  }
-
   void sendStatusOk()
   {
     dispatchTransportJson("{\"status\":\"ok\"}");
@@ -1896,174 +1275,6 @@ namespace
 
     payload += F("}");
     dispatchTransportJson(payload);
-  }
-
-  void publishWifiState(const char *state, const char *ssid, const char *message)
-  {
-    String nextState = state ? String(state) : String();
-    if (nextState.isEmpty())
-    {
-      if (ssid)
-      {
-        lastWifiSsid = String(ssid);
-      }
-      if (message)
-      {
-        lastWifiMessage = String(message);
-      }
-      lastWifiState = "";
-      return;
-    }
-
-    String nextSsid = ssid ? String(ssid) : lastWifiSsid;
-    if (!ssid && nextState == "connected")
-    {
-      String currentSsid = WiFi.SSID();
-      if (currentSsid.length())
-      {
-        nextSsid = currentSsid;
-      }
-    }
-
-    String nextMessage = message ? String(message) : lastWifiMessage;
-
-    if (nextState == lastWifiState && nextSsid == lastWifiSsid && nextMessage == lastWifiMessage)
-    {
-      return;
-    }
-
-    lastWifiState = nextState;
-    lastWifiSsid = nextSsid;
-    lastWifiMessage = nextMessage;
-    dispatchWifiState(lastWifiState, lastWifiSsid, lastWifiMessage);
-  }
-
-  void sendCachedWifiState()
-  {
-    if (lastWifiState.isEmpty())
-    {
-      return;
-    }
-    dispatchWifiState(lastWifiState, lastWifiSsid, lastWifiMessage);
-  }
-
-  void appendWifiStateJson(JsonVariant doc)
-  {
-    if (doc.isNull())
-    {
-      return;
-    }
-
-    doc["state"] = lastWifiState.isEmpty() ? "" : lastWifiState;
-
-    if (!lastWifiSsid.isEmpty())
-    {
-      doc["ssid"] = lastWifiSsid;
-    }
-    else
-    {
-      doc.remove("ssid");
-    }
-
-    if (!lastWifiMessage.isEmpty())
-    {
-      doc["message"] = lastWifiMessage;
-    }
-    else
-    {
-      doc.remove("message");
-    }
-  }
-
-  bool connectStationAndPersist(const String &ssid, const String &password, bool keepApActive)
-  {
-    publishWifiState("connecting", ssid.c_str());
-
-    if (!connectToStation(ssid, password, keepApActive))
-    {
-      publishWifiState("failed", ssid.c_str(), "Connection timed out");
-      return false;
-    }
-
-    if (!saveWifiCredentials(ssid, password))
-    {
-      sendStatusError("Failed to save WiFi credentials");
-      publishWifiState("failed", ssid.c_str(), "Failed to save WiFi credentials");
-      if (keepApActive)
-      {
-        apShutdownPending = false;
-        wifiState = WifiState::ApSta;
-        wifiTargetMode = WIFI_MODE_APSTA;
-      }
-      return false;
-    }
-
-    if (!keepApActive)
-    {
-      stopAccessPoint();
-    }
-    sendEvent("wifi_sta_connected", ssid.c_str());
-    publishWifiState("connected", ssid.c_str());
-    return true;
-  }
-
-  void processWifiStateMachine()
-  {
-    if (apShutdownPending && millis() >= apShutdownDeadline)
-    {
-      finalizeStaOnlyTransition();
-    }
-  }
-
-  void onWifiEvent(WiFiEvent_t event, WiFiEventInfo_t info)
-  {
-#if defined(ESP_ARDUINO_VERSION_MAJOR) && ESP_ARDUINO_VERSION_MAJOR >= 2
-    switch (event)
-    {
-    case ARDUINO_EVENT_WIFI_STA_GOT_IP:
-      staConnectInProgress = false;
-      {
-        String ssid = WiFi.SSID();
-        publishWifiState("connected", ssid.c_str());
-      }
-      scheduleStaOnlyTransition();
-      break;
-    case ARDUINO_EVENT_WIFI_STA_DISCONNECTED:
-    {
-      staConnectInProgress = false;
-      uint8_t reason = info.wifi_sta_disconnected.reason;
-      String message = F("Disconnect reason ");
-      message += String(reason);
-      publishWifiState("failed", nullptr, message.c_str());
-      break;
-    }
-    default:
-      break;
-    }
-#else
-    switch (event)
-    {
-    case SYSTEM_EVENT_STA_GOT_IP:
-      staConnectInProgress = false;
-      {
-        String ssid = WiFi.SSID();
-        publishWifiState("connected", ssid.c_str());
-      }
-      scheduleStaOnlyTransition();
-      break;
-    case SYSTEM_EVENT_STA_DISCONNECTED:
-    {
-      staConnectInProgress = false;
-      uint8_t reason = info.disconnected.reason;
-      String message = F("Disconnect reason ");
-      message += String(reason);
-      publishWifiState("failed", nullptr, message.c_str());
-      break;
-    }
-    default:
-      break;
-    }
-#endif
   }
 
   bool lookupKeyCode(const String &token, uint8_t &code)
@@ -2916,23 +2127,20 @@ void setup()
 
   startHttpServerTask();
   startTransportPumpTask();
-  WiFi.onEvent(onWifiEvent);
+  wifi_manager::Callbacks callbacks;
+  callbacks.dispatch_transport_json = dispatchTransportJson;
+  callbacks.send_status_error = sendStatusError;
+  callbacks.send_event = sendEvent;
+  wifi_manager::init(callbacks);
 
-  String savedSsid;
-  String savedPassword;
-  bool staConnected = false;
-  if (loadWifiCredentials(savedSsid, savedPassword))
-  {
-    if (connectStationAndPersist(savedSsid, savedPassword, false))
-    {
-      staConnected = true;
-    }
-  }
+  WiFi.onEvent(wifi_manager::on_event);
+
+  bool staConnected = wifi_manager::connect_saved_credentials();
 
   if (!staConnected)
   {
-    startAccessPoint();
-    if (configurationMode)
+    wifi_manager::start_ap();
+    if (wifi_manager::is_configuration_mode())
     {
       sendEvent("wifi_config_mode");
     }
@@ -2950,11 +2158,7 @@ void loop()
     sendEvent(connected ? "ble_connected" : "ble_disconnected");
   }
 
-  if (dnsServerActive)
-  {
-    dnsServer.processNextRequest();
-  }
-
-  processWifiStateMachine();
+  wifi_manager::process_dns();
+  wifi_manager::process();
   delay(2);
 }
