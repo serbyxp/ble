@@ -334,13 +334,13 @@ namespace
       Serial.setTimeout(0);
     }
   }
-  extern const uint8_t src_main_web_index_html_start[] asm("_binary_src_main_web_index_html_start");
-  extern const uint8_t src_main_web_index_html_end[] asm("_binary_src_main_web_index_html_end");
+  extern const uint8_t src_web_index_html_start[] asm("_binary_src_web_index_html_start");
+  extern const uint8_t src_web_index_html_end[] asm("_binary_src_web_index_html_end");
 
   size_t captivePortalIndexHtmlLength()
   {
     return static_cast<size_t>(
-        src_main_web_index_html_end - src_main_web_index_html_start);
+        src_web_index_html_end - src_web_index_html_start);
   }
 
   bool connectStationAndPersist(const String &ssid, const String &password, bool keepApActive);
@@ -674,7 +674,7 @@ namespace
     httpd_resp_set_status(req, "200 OK");
     httpd_resp_set_type(req, "text/html");
     return httpd_resp_send(req,
-                           reinterpret_cast<const char *>(src_main_web_index_html_start),
+                           reinterpret_cast<const char *>(src_web_index_html_start),
                            captivePortalIndexHtmlLength());
   }
 
