@@ -363,6 +363,7 @@ enum class WifiState : uint8_t
 WifiState wifiState = WifiState::ApOnly;
 wifi_mode_t wifiCurrentMode = WIFI_MODE_NULL;
 wifi_mode_t wifiTargetMode = WIFI_MODE_AP;
+wifi_mode_t wifiModeBeforeTemporarySta = WIFI_MODE_NULL;
 bool temporaryApStaMode = false;
 bool apShutdownPending = false;
 unsigned long apShutdownDeadline = 0;
@@ -751,17 +752,41 @@ void ensureStaOnlyMode()
 
 void requestApStaMode(bool temporary)
 {
+  if (temporary)
+  {
+    wifiModeBeforeTemporarySta = wifiCurrentMode;
+    if (wifiModeBeforeTemporarySta == WIFI_MODE_STA)
+    {
+      wifiTargetMode = WIFI_MODE_STA;
+    }
+    else
+    {
+      wifiTargetMode = WIFI_MODE_AP;
+    }
+  }
+  else
+  {
+    wifiModeBeforeTemporarySta = WIFI_MODE_NULL;
+    wifiTargetMode = WIFI_MODE_STA;
+  }
   setWifiModeTracked(WIFI_MODE_APSTA);
   wifiState = WifiState::ApSta;
   temporaryApStaMode = temporary;
-  wifiTargetMode = temporary ? WIFI_MODE_AP : WIFI_MODE_STA;
 }
 
 void restoreApModeAfterTemporarySta()
 {
   if (temporaryApStaMode && wifiState == WifiState::ApSta)
   {
-    ensureApOnlyMode();
+    if (wifiModeBeforeTemporarySta == WIFI_MODE_STA)
+    {
+      ensureStaOnlyMode();
+    }
+    else
+    {
+      ensureApOnlyMode();
+    }
+    wifiModeBeforeTemporarySta = WIFI_MODE_NULL;
   }
 }
 
