@@ -907,21 +907,26 @@ esp_err_t handleConfigure(httpd_req_t *req)
   std::string body;
   body.resize(req->content_len);
   size_t received = 0;
-  while (received < body.size())
+  if (!body.empty())
   {
-    int ret = httpd_req_recv(req, body.data() + received, body.size() - received);
-    if (ret <= 0)
+    char *buffer = &body[0];
+    while (received < body.size())
     {
-      DynamicJsonDocument response(128);
-      response["status"] = "error";
-      response["message"] = "Failed to read body";
-      return sendJsonResponse(req, 400, response);
+      int ret = httpd_req_recv(req, buffer + received, body.size() - received);
+      if (ret <= 0)
+      {
+        DynamicJsonDocument response(128);
+        response["status"] = "error";
+        response["message"] = "Failed to read body";
+        return sendJsonResponse(req, 400, response);
+      }
+      received += static_cast<size_t>(ret);
     }
-    received += static_cast<size_t>(ret);
   }
+  body.push_back('\0');
 
   StaticJsonDocument<256> payload;
-  DeserializationError error = deserializeJson(payload, body);
+  DeserializationError error = deserializeJson(payload, body.c_str());
   if (error)
   {
     DynamicJsonDocument response(128);
@@ -1024,21 +1029,26 @@ esp_err_t handleTransportPost(httpd_req_t *req)
   std::string body;
   body.resize(req->content_len);
   size_t received = 0;
-  while (received < body.size())
+  if (!body.empty())
   {
-    int ret = httpd_req_recv(req, body.data() + received, body.size() - received);
-    if (ret <= 0)
+    char *buffer = &body[0];
+    while (received < body.size())
     {
-      DynamicJsonDocument response(128);
-      response["status"] = "error";
-      response["message"] = "Failed to read body";
-      return sendJsonResponse(req, 400, response);
+      int ret = httpd_req_recv(req, buffer + received, body.size() - received);
+      if (ret <= 0)
+      {
+        DynamicJsonDocument response(128);
+        response["status"] = "error";
+        response["message"] = "Failed to read body";
+        return sendJsonResponse(req, 400, response);
+      }
+      received += static_cast<size_t>(ret);
     }
-    received += static_cast<size_t>(ret);
   }
+  body.push_back('\0');
 
   StaticJsonDocument<160> payload;
-  DeserializationError error = deserializeJson(payload, body);
+  DeserializationError error = deserializeJson(payload, body.c_str());
   if (error)
   {
     DynamicJsonDocument response(128);
