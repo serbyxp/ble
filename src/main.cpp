@@ -1,11 +1,16 @@
 #include <Arduino.h>
 #include <BleCombo.h>
 #include <ArduinoJson.h>
+#include <DNSServer.h>
+#include <WebServer.h>
 #include <WiFi.h>
+#include <esp_wifi.h>
 #include <nvs.h>
 #include <nvs_flash.h>
+#include <pgmspace.h>
 #include <stdlib.h>
 #include <strings.h>
+#include <algorithm>
 #include <vector>
 
 namespace
@@ -22,6 +27,27 @@ constexpr unsigned long WIFI_CONNECT_TIMEOUT_MS = 20000;
 constexpr unsigned long WIFI_RETRY_DELAY_MS = 500;
 constexpr const char *CONFIG_AP_SSID = "uhid-setup";
 constexpr const char *CONFIG_AP_PASSWORD = "uhid1234";
+constexpr uint16_t DNS_PORT = 53;
+constexpr uint16_t HTTP_PORT = 80;
+
+DNSServer dnsServer;
+WebServer webServer(HTTP_PORT);
+bool dnsServerActive = false;
+bool webServerRunning = false;
+
+extern const uint8_t src_main_web_index_html_start[] asm("_binary_src_main_web_index_html_start");
+extern const uint8_t src_main_web_index_html_end[] asm("_binary_src_main_web_index_html_end");
+
+constexpr size_t CAPTIVE_PORTAL_INDEX_HTML_LENGTH = static_cast<size_t>(
+    src_main_web_index_html_end - src_main_web_index_html_start);
+
+
+bool connectStationAndPersist(const String &ssid, const String &password, bool keepApActive);
+void startAccessPoint();
+
+String inputBuffer;
+bool lastBleConnectionState = false;
+bool configurationMode = false;
 
 struct NamedCode
 {
@@ -167,10 +193,6 @@ const size_t CONSUMER_KEY_MAP_SIZE = sizeof(CONSUMER_KEY_MAP) / sizeof(CONSUMER_
 
 constexpr size_t MAX_CONSUMER_KEYS = 8;
 
-String inputBuffer;
-bool lastBleConnectionState = false;
-bool configurationMode = false;
-
 bool initializeNvs()
 {
   esp_err_t err = nvs_flash_init();
@@ -272,12 +294,253 @@ bool saveWifiCredentials(const String &ssid, const String &password)
   return err == ESP_OK;
 }
 
+const char *wifiAuthModeToString(wifi_auth_mode_t mode)
+{
+  switch (mode)
+  {
+  case WIFI_AUTH_OPEN:
+    return "open";
+  case WIFI_AUTH_WEP:
+    return "wep";
+  case WIFI_AUTH_WPA_PSK:
+    return "wpa_psk";
+  case WIFI_AUTH_WPA2_PSK:
+    return "wpa2_psk";
+  case WIFI_AUTH_WPA_WPA2_PSK:
+    return "wpa_wpa2_psk";
+  case WIFI_AUTH_WPA2_ENTERPRISE:
+    return "wpa2_enterprise";
+  case WIFI_AUTH_WPA3_PSK:
+    return "wpa3_psk";
+  case WIFI_AUTH_WPA2_WPA3_PSK:
+    return "wpa2_wpa3_psk";
+  case WIFI_AUTH_WAPI_PSK:
+    return "wapi_psk";
+  default:
+    return "unknown";
+  }
+}
+
+void sendPortalPage()
+{
+  webServer.sendHeader("Cache-Control", "no-store, no-cache, must-revalidate");
+  webServer.sendHeader("Pragma", "no-cache");
+  webServer.sendHeader("Expires", "0");
+  webServer.send_P(200,
+                   "text/html",
+                   reinterpret_cast<const char *>(src_main_web_index_html_start),
+                   CAPTIVE_PORTAL_INDEX_HTML_LENGTH);
+}
+
+void sendJsonResponse(int statusCode, const JsonDocument &doc)
+{
+  String payload;
+  serializeJson(doc, payload);
+  webServer.sendHeader("Cache-Control", "no-store, no-cache, must-revalidate");
+  webServer.sendHeader("Pragma", "no-cache");
+  webServer.sendHeader("Expires", "0");
+  webServer.send(statusCode, "application/json", payload);
+}
+
+void startCaptivePortalServices()
+{
+  if (dnsServerActive)
+  {
+    dnsServer.stop();
+  }
+
+  dnsServer.setErrorReplyCode(DNSReplyCode::NoError);
+  IPAddress apIp = WiFi.softAPIP();
+  dnsServer.start(DNS_PORT, "*", apIp);
+  dnsServerActive = true;
+
+  if (!webServerRunning)
+  {
+    webServer.begin();
+    webServerRunning = true;
+  }
+}
+
+void stopCaptivePortalServices()
+{
+  if (dnsServerActive)
+  {
+    dnsServer.stop();
+    dnsServerActive = false;
+  }
+}
+
+void handleIndex()
+{
+  sendPortalPage();
+}
+
+void handleNotFound()
+{
+  if (configurationMode)
+  {
+    sendPortalPage();
+  }
+  else
+  {
+    webServer.send(404, "text/plain", "Not found");
+  }
+}
+
+void handleScan()
+{
+  wifi_scan_config_t scanConfig = {};
+  scanConfig.show_hidden = false;
+  scanConfig.scan_type = WIFI_SCAN_TYPE_ACTIVE;
+
+  esp_err_t err = esp_wifi_scan_start(&scanConfig, true);
+  if (err != ESP_OK)
+  {
+    DynamicJsonDocument response(160);
+    response["status"] = "error";
+    response["message"] = "Scan failed";
+    response["code"] = static_cast<int>(err);
+    sendJsonResponse(500, response);
+    return;
+  }
+
+  uint16_t apCount = 0;
+  esp_err_t countErr = esp_wifi_scan_get_ap_num(&apCount);
+  if (countErr != ESP_OK)
+  {
+    DynamicJsonDocument response(160);
+    response["status"] = "error";
+    response["message"] = "Unable to read scan results";
+    response["code"] = static_cast<int>(countErr);
+    sendJsonResponse(500, response);
+    return;
+  }
+  std::vector<wifi_ap_record_t> records(apCount);
+  if (apCount > 0)
+  {
+    esp_wifi_scan_get_ap_records(&apCount, records.data());
+    records.resize(apCount);
+  }
+
+  std::sort(records.begin(), records.end(), [](const wifi_ap_record_t &a, const wifi_ap_record_t &b) {
+    return a.rssi > b.rssi;
+  });
+
+  const size_t maxNetworks = 20;
+  const size_t visibleNetworks = std::min(records.size(), maxNetworks);
+  DynamicJsonDocument doc(256 + visibleNetworks * 96);
+  JsonArray networks = doc.createNestedArray("networks");
+  size_t added = 0;
+  for (const auto &record : records)
+  {
+    if (added >= maxNetworks)
+    {
+      break;
+    }
+
+    JsonObject network = networks.createNestedObject();
+    network["ssid"] = reinterpret_cast<const char *>(record.ssid);
+    network["rssi"] = record.rssi;
+    network["channel"] = record.primary;
+    network["auth"] = wifiAuthModeToString(record.authmode);
+    ++added;
+  }
+
+  doc["status"] = "ok";
+  sendJsonResponse(200, doc);
+}
+
+void handleConfigure()
+{
+  if (webServer.method() != HTTP_POST)
+  {
+    DynamicJsonDocument response(128);
+    response["status"] = "error";
+    response["message"] = "Method not allowed";
+    sendJsonResponse(405, response);
+    return;
+  }
+
+  if (!webServer.hasArg("plain"))
+  {
+    DynamicJsonDocument response(128);
+    response["status"] = "error";
+    response["message"] = "Missing request body";
+    sendJsonResponse(400, response);
+    return;
+  }
+
+  StaticJsonDocument<256> payload;
+  DeserializationError error = deserializeJson(payload, webServer.arg("plain"));
+  if (error)
+  {
+    DynamicJsonDocument response(128);
+    response["status"] = "error";
+    response["message"] = "Invalid JSON";
+    sendJsonResponse(400, response);
+    return;
+  }
+
+  String ssid = payload["ssid"] | "";
+  String password = payload["password"] | "";
+  ssid.trim();
+
+  if (ssid.isEmpty())
+  {
+    DynamicJsonDocument response(128);
+    response["status"] = "error";
+    response["message"] = "SSID is required";
+    sendJsonResponse(400, response);
+    return;
+  }
+
+  if (!configurationMode)
+  {
+    startAccessPoint();
+  }
+
+  bool connected = connectStationAndPersist(ssid, password, true);
+
+  DynamicJsonDocument response(192);
+  response["ssid"] = ssid;
+
+  if (connected)
+  {
+    response["status"] = "ok";
+    response["message"] = "Connected";
+    sendJsonResponse(200, response);
+  }
+  else
+  {
+    response["status"] = "error";
+    response["message"] = "Failed to connect";
+    sendJsonResponse(500, response);
+    if (!configurationMode)
+    {
+      startAccessPoint();
+    }
+  }
+}
+
+void initializeWebServer()
+{
+  webServer.on("/", HTTP_GET, handleIndex);
+  webServer.on("/index.html", HTTP_GET, handleIndex);
+  webServer.on("/scan", HTTP_GET, handleScan);
+  webServer.on("/configure", HTTP_POST, handleConfigure);
+  webServer.on("/generate_204", HTTP_GET, handleIndex);
+  webServer.on("/hotspot-detect.html", HTTP_GET, handleIndex);
+  webServer.on("/ncsi.txt", HTTP_GET, handleIndex);
+  webServer.onNotFound(handleNotFound);
+}
+
 void stopAccessPoint()
 {
   wifi_mode_t mode = WiFi.getMode();
   if (mode & WIFI_MODE_AP)
   {
     WiFi.softAPdisconnect(true);
+    stopCaptivePortalServices();
     if (mode == WIFI_MODE_AP)
     {
       WiFi.mode(WIFI_OFF);
@@ -298,17 +561,25 @@ void startAccessPoint()
   IPAddress subnet(255, 255, 255, 0);
   WiFi.softAPConfig(localIp, gateway, subnet);
   WiFi.softAP(CONFIG_AP_SSID, CONFIG_AP_PASSWORD);
+  startCaptivePortalServices();
   configurationMode = true;
 }
 
-bool connectToStation(const String &ssid, const String &password)
+bool connectToStation(const String &ssid, const String &password, bool keepApActive)
 {
   if (ssid.isEmpty())
   {
     return false;
   }
 
-  WiFi.mode(WIFI_MODE_STA);
+  if (keepApActive)
+  {
+    WiFi.mode(WIFI_MODE_APSTA);
+  }
+  else
+  {
+    WiFi.mode(WIFI_MODE_STA);
+  }
   WiFi.persistent(false);
   WiFi.setAutoReconnect(true);
   WiFi.begin(ssid.c_str(), password.c_str());
@@ -328,7 +599,16 @@ bool connectToStation(const String &ssid, const String &password)
     delay(WIFI_RETRY_DELAY_MS);
   }
 
-  WiFi.disconnect();
+  if (keepApActive)
+  {
+    esp_wifi_disconnect();
+    WiFi.mode(WIFI_MODE_APSTA);
+    startCaptivePortalServices();
+  }
+  else
+  {
+    WiFi.disconnect();
+  }
   return false;
 }
 
@@ -360,17 +640,18 @@ void sendEvent(const char *name, const char *detail = nullptr)
   }
 }
 
-bool connectStationAndPersist(const String &ssid, const String &password)
+bool connectStationAndPersist(const String &ssid, const String &password, bool keepApActive)
 {
-  if (!connectToStation(ssid, password))
-  {
-    return false;
-  }
-
   if (!saveWifiCredentials(ssid, password))
   {
     sendStatusError("Failed to save WiFi credentials");
   }
+
+  if (!connectToStation(ssid, password, keepApActive))
+  {
+    return false;
+  }
+
   stopAccessPoint();
   configurationMode = false;
   sendEvent("wifi_sta_connected", ssid.c_str());
@@ -1211,6 +1492,8 @@ void setup()
   Keyboard.begin();
   Mouse.begin();
 
+  initializeWebServer();
+
   if (!initializeNvs())
   {
     sendStatusError("Failed to initialize NVS");
@@ -1221,7 +1504,7 @@ void setup()
   bool staConnected = false;
   if (loadWifiCredentials(savedSsid, savedPassword))
   {
-    if (connectStationAndPersist(savedSsid, savedPassword))
+    if (connectStationAndPersist(savedSsid, savedPassword, false))
     {
       staConnected = true;
     }
@@ -1271,6 +1554,16 @@ void loop()
   {
     lastBleConnectionState = connected;
     sendEvent(connected ? "ble_connected" : "ble_disconnected");
+  }
+
+  if (dnsServerActive)
+  {
+    dnsServer.processNextRequest();
+  }
+
+  if (webServerRunning)
+  {
+    webServer.handleClient();
   }
 
   delay(2);
