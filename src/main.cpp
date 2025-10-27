@@ -19,7 +19,6 @@
 #include <cstring>
 #include <string>
 #include <atomic>
-#include <algorithm>
 #include <vector>
 #include <cstdio>
 
@@ -851,65 +850,34 @@ namespace
   esp_err_t handleScan(httpd_req_t *req)
   {
     requestApStaMode(true);
-    wifi_scan_config_t scanConfig = {};
-    scanConfig.show_hidden = false;
-    scanConfig.scan_type = WIFI_SCAN_TYPE_ACTIVE;
 
-    esp_err_t err = esp_wifi_scan_start(&scanConfig, true);
-    if (err != ESP_OK)
+    int16_t networkCount = WiFi.scanNetworks(/*async=*/false, /*show_hidden=*/false, /*passive=*/false);
+    if (networkCount < 0)
     {
       restoreApModeAfterTemporarySta();
       JsonDocument response;
       auto obj = response.to<JsonObject>();
       obj["status"] = "error";
       obj["message"] = "Scan failed";
-      obj["code"] = static_cast<int>(err);
+      obj["code"] = static_cast<int>(networkCount);
       return sendJsonResponse(req, 500, response);
     }
-
-    uint16_t apCount = 0;
-    esp_err_t countErr = esp_wifi_scan_get_ap_num(&apCount);
-    if (countErr != ESP_OK)
-    {
-      restoreApModeAfterTemporarySta();
-      JsonDocument response;
-      auto obj = response.to<JsonObject>();
-      obj["status"] = "error";
-      obj["message"] = "Unable to read scan results";
-      obj["code"] = static_cast<int>(countErr);
-      return sendJsonResponse(req, 500, response);
-    }
-    std::vector<wifi_ap_record_t> records(apCount);
-    if (apCount > 0)
-    {
-      esp_wifi_scan_get_ap_records(&apCount, records.data());
-      records.resize(apCount);
-    }
-
-    std::sort(records.begin(), records.end(), [](const wifi_ap_record_t &a, const wifi_ap_record_t &b)
-              { return a.rssi > b.rssi; });
 
     const size_t maxNetworks = 20;
-    const size_t visibleNetworks = std::min(records.size(), maxNetworks);
     JsonDocument doc;
     auto obj = doc.to<JsonObject>();
     JsonArray networks = obj["networks"].to<JsonArray>();
-    size_t added = 0;
-    for (const auto &record : records)
-    {
-      if (added >= maxNetworks)
-      {
-        break;
-      }
 
+    for (int16_t index = 0; index < networkCount && index < static_cast<int16_t>(maxNetworks); ++index)
+    {
       JsonObject network = networks.add<JsonObject>();
-      network["ssid"] = reinterpret_cast<const char *>(record.ssid);
-      network["rssi"] = record.rssi;
-      network["channel"] = record.primary;
-      network["auth"] = wifiAuthModeToString(record.authmode);
-      ++added;
+      network["ssid"] = WiFi.SSID(index);
+      network["rssi"] = WiFi.RSSI(index);
+      network["channel"] = WiFi.channel(index);
+      network["auth"] = wifiAuthModeToString(static_cast<wifi_auth_mode_t>(WiFi.encryptionType(index)));
     }
 
+    WiFi.scanDelete();
     restoreApModeAfterTemporarySta();
     obj["status"] = "ok";
     return sendJsonResponse(req, 200, doc);
