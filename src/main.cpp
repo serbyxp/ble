@@ -1,7 +1,6 @@
 #include <Arduino.h>
 #include <BleCombo.h>
 #include <ArduinoJson.h>
-#include <esp_http_server.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/queue.h>
 #include <freertos/task.h>
@@ -20,12 +19,13 @@
 #include <vector>
 #include <cstdio>
 
+#include "http_server.h"
 #include "wifi_manager.h"
 
 namespace
 {
   constexpr size_t JSON_DOC_CAPACITY = 512;
-  constexpr size_t INPUT_BUFFER_LIMIT = 512;
+  constexpr size_t INPUT_BUFFER_LIMIT = http_server::kMaxTransportPayload;
   constexpr size_t MAX_KEY_COMBO = 8;
   constexpr uint8_t MOUSE_ALL_BUTTONS = MOUSE_LEFT | MOUSE_RIGHT | MOUSE_MIDDLE | MOUSE_BACK | MOUSE_FORWARD;
   constexpr uint16_t DEFAULT_CHAR_DELAY_MS = 6;
@@ -33,9 +33,6 @@ namespace
   constexpr const char *NVS_KEY_TRANSPORT_MODE = "mode";
   constexpr const char *NVS_KEY_UART_BAUD = "baud";
   constexpr uint32_t DEFAULT_UART_BAUD = 115200;
-  constexpr uint16_t HTTP_PORT = 80;
-  constexpr const char *HTTP_STATUS_SERVICE_UNAVAILABLE = "503 Service Unavailable";
-
 #if defined(CONFIG_BT_NIMBLE_PINNED_TO_CORE)
   constexpr BaseType_t kHttpTaskCore = (CONFIG_BT_NIMBLE_PINNED_TO_CORE == 0) ? 1 : 0;
 #elif defined(CONFIG_FREERTOS_UNICORE) && CONFIG_FREERTOS_UNICORE
@@ -46,55 +43,35 @@ namespace
   constexpr BaseType_t kHttpTaskCore = 0;
 #endif
 
-  struct TransportMessage
-  {
-    size_t length;
-    char payload[INPUT_BUFFER_LIMIT];
-  };
+  using http_server::TransportMessage;
 
   constexpr UBaseType_t TRANSPORT_COMMAND_QUEUE_LENGTH = 8;
   constexpr UBaseType_t TRANSPORT_EVENT_QUEUE_LENGTH = 8;
-
-  enum class TransportMode : uint8_t
-  {
-    Uart = 0,
-    Websocket = 1
-  };
 
   std::atomic<TransportMode> activeTransportMode{TransportMode::Uart};
   uint32_t uartBaudRate = DEFAULT_UART_BAUD;
   bool serialActive = false;
 
-  esp_err_t handleWebSocket(httpd_req_t *req);
-  void httpServerTask(void *param);
-  void startHttpServerTask();
   void transportPumpTask(void *param);
   void startTransportPumpTask();
   void wifiConnectTask(void *param);
   bool ensureTransportQueues();
-  void closeActiveWebsocket();
   void resetTransportQueues();
   bool applyTransportMode(TransportMode mode);
   bool saveTransportConfig(TransportMode mode, uint32_t baud);
   TransportMode loadTransportModeFromStorage(uint32_t &baudOut);
   const char *transportModeToString(TransportMode mode);
   TransportMode stringToTransportMode(const char *value);
-  esp_err_t handleTransportGet(httpd_req_t *req);
-  esp_err_t handleTransportPost(httpd_req_t *req);
   void sendStatusOk();
   void sendStatusError(const char *message);
   void sendEvent(const char *name, const char *detail = nullptr);
-  esp_err_t handleWifiStateGet(httpd_req_t *req);
   void applyUartBaudRate(uint32_t baud);
   void flushInputBuffer();
   void processCommand(const String &payload);
 
   QueueHandle_t transportCommandQueue = nullptr;
   QueueHandle_t transportEventQueue = nullptr;
-  TaskHandle_t httpServerTaskHandle = nullptr;
   TaskHandle_t transportPumpTaskHandle = nullptr;
-  httpd_handle_t httpServerHandle = nullptr;
-  volatile int wsClientSocket = -1;
 
   bool enqueueTransportMessage(QueueHandle_t queue, const char *data, size_t length)
   {
@@ -162,15 +139,6 @@ namespace
     return transportCommandQueue != nullptr && transportEventQueue != nullptr;
   }
 
-  void closeActiveWebsocket()
-  {
-    if (httpServerHandle && wsClientSocket >= 0)
-    {
-      httpd_sess_trigger_close(httpServerHandle, wsClientSocket);
-    }
-    wsClientSocket = -1;
-  }
-
   void resetTransportQueues()
   {
     if (transportCommandQueue)
@@ -209,6 +177,16 @@ namespace
     return TransportMode::Uart;
   }
 
+  TransportMode getActiveTransportMode()
+  {
+    return activeTransportMode.load();
+  }
+
+  uint32_t getCurrentUartBaudRate()
+  {
+    return uartBaudRate;
+  }
+
   bool applyTransportMode(TransportMode mode)
   {
     TransportMode previous = activeTransportMode.load();
@@ -236,7 +214,7 @@ namespace
         serialActive = true;
       }
       activeTransportMode.store(TransportMode::Uart);
-      closeActiveWebsocket();
+      http_server::close_active_websocket();
       resetTransportQueues();
     }
 
@@ -319,15 +297,6 @@ namespace
       Serial.setTimeout(0);
     }
   }
-  extern const uint8_t src_web_index_html_start[] asm("_binary_src_web_index_html_start");
-  extern const uint8_t src_web_index_html_end[] asm("_binary_src_web_index_html_end");
-
-  size_t captivePortalIndexHtmlLength()
-  {
-    return static_cast<size_t>(
-        src_web_index_html_end - src_web_index_html_start);
-  }
-
   String inputBuffer;
   bool lastBleConnectionState = false;
 
@@ -487,601 +456,6 @@ namespace
       err = nvs_flash_init();
     }
     return err == ESP_OK;
-  }
-
-  void setNoCacheHeaders(httpd_req_t *req)
-  {
-    httpd_resp_set_hdr(req, "Cache-Control", "no-store, no-cache, must-revalidate");
-    httpd_resp_set_hdr(req, "Pragma", "no-cache");
-    httpd_resp_set_hdr(req, "Expires", "0");
-  }
-
-  const char *reasonPhraseForStatus(int statusCode)
-  {
-    switch (statusCode)
-    {
-    case 200:
-      return "OK";
-    case 400:
-      return "Bad Request";
-    case 404:
-      return "Not Found";
-    case 405:
-      return "Method Not Allowed";
-    case 500:
-      return "Internal Server Error";
-    default:
-      return "OK";
-    }
-  }
-
-  esp_err_t sendPortalPage(httpd_req_t *req)
-  {
-    setNoCacheHeaders(req);
-    httpd_resp_set_status(req, "200 OK");
-    httpd_resp_set_type(req, "text/html");
-    return httpd_resp_send(req,
-                           reinterpret_cast<const char *>(src_web_index_html_start),
-                           captivePortalIndexHtmlLength());
-  }
-
-  esp_err_t sendJsonResponse(httpd_req_t *req, int statusCode, const JsonDocument &doc)
-  {
-    String payload;
-    serializeJson(doc, payload);
-    setNoCacheHeaders(req);
-    httpd_resp_set_type(req, "application/json");
-    char status[32];
-    const char *reason = reasonPhraseForStatus(statusCode);
-    snprintf(status, sizeof(status), "%d %s", statusCode, reason);
-    httpd_resp_set_status(req, status);
-    return httpd_resp_send(req, payload.c_str(), HTTPD_RESP_USE_STRLEN);
-  }
-
-  esp_err_t handleIndex(httpd_req_t *req)
-  {
-    return sendPortalPage(req);
-  }
-
-  esp_err_t handleHttp404(httpd_req_t *req, httpd_err_code_t)
-  {
-    if (wifi_manager::is_configuration_mode())
-    {
-      return sendPortalPage(req);
-    }
-
-    setNoCacheHeaders(req);
-    httpd_resp_set_status(req, "404 Not Found");
-    httpd_resp_set_type(req, "text/plain");
-    return httpd_resp_send(req, "Not found", HTTPD_RESP_USE_STRLEN);
-  }
-
-  esp_err_t handleScan(httpd_req_t *req)
-  {
-    JsonDocument doc;
-    auto obj = doc.to<JsonObject>();
-    JsonArray networks = obj["networks"].to<JsonArray>();
-    String errorMessage;
-    int errorCode = 0;
-    if (!wifi_manager::scan_networks(networks, errorMessage, errorCode))
-    {
-      JsonDocument response;
-      auto errorObj = response.to<JsonObject>();
-      errorObj["status"] = "error";
-      errorObj["message"] = errorMessage;
-      if (errorCode != 0)
-      {
-        errorObj["code"] = errorCode;
-      }
-      int status = (errorCode == 0) ? 503 : 500;
-      return sendJsonResponse(req, status, response);
-    }
-
-    obj["status"] = "ok";
-    return sendJsonResponse(req, 200, doc);
-  }
-
-  esp_err_t handleConfigure(httpd_req_t *req)
-  {
-    if (req->method != HTTP_POST)
-    {
-      JsonDocument response;
-      auto obj = response.to<JsonObject>();
-      obj["status"] = "error";
-      obj["message"] = "Method not allowed";
-      return sendJsonResponse(req, 405, response);
-    }
-
-    if (req->content_len == 0)
-    {
-      JsonDocument response;
-      auto obj = response.to<JsonObject>();
-      obj["status"] = "error";
-      obj["message"] = "Missing request body";
-      return sendJsonResponse(req, 400, response);
-    }
-
-    std::string body;
-    body.resize(req->content_len);
-    size_t received = 0;
-    if (!body.empty())
-    {
-      char *buffer = &body[0];
-      while (received < body.size())
-      {
-        int ret = httpd_req_recv(req, buffer + received, body.size() - received);
-        if (ret <= 0)
-        {
-          JsonDocument response;
-          auto obj = response.to<JsonObject>();
-          obj["status"] = "error";
-          obj["message"] = "Failed to read body";
-          return sendJsonResponse(req, 400, response);
-        }
-        received += static_cast<size_t>(ret);
-      }
-    }
-    body.push_back('\0');
-
-    JsonDocument payload;
-    DeserializationError error = deserializeJson(payload, body.c_str());
-    if (error)
-    {
-      JsonDocument response;
-      auto obj = response.to<JsonObject>();
-      obj["status"] = "error";
-      obj["message"] = "Invalid JSON";
-      return sendJsonResponse(req, 400, response);
-    }
-
-    String ssid = payload["ssid"] | "";
-    String password = payload["password"] | "";
-    ssid.trim();
-
-    if (ssid.isEmpty())
-    {
-      JsonDocument response;
-      auto obj = response.to<JsonObject>();
-      obj["status"] = "error";
-      obj["message"] = "SSID is required";
-      return sendJsonResponse(req, 400, response);
-    }
-
-    if (!wifi_manager::is_configuration_mode())
-    {
-      wifi_manager::start_ap();
-      if (wifi_manager::is_configuration_mode())
-      {
-        sendEvent("wifi_config_mode");
-      }
-    }
-
-    if (!wifi_manager::schedule_connect(ssid, password, false))
-    {
-      JsonDocument response;
-      auto obj = response.to<JsonObject>();
-      obj["status"] = "error";
-      obj["message"] = "A WiFi connection attempt is already in progress";
-      return sendJsonResponse(req, 409, response);
-    }
-
-    sendEvent("wifi_connecting", ssid.c_str());
-
-    JsonDocument response;
-    auto obj = response.to<JsonObject>();
-    obj["status"] = "ok";
-    wifi_manager::append_state_json(obj);
-    obj["state"] = "connecting";
-    if (!obj["ssid"].is<const char *>() || obj["ssid"].as<const char *>()[0] == '\0')
-    {
-      obj["ssid"] = ssid;
-    }
-    const char *messageValue = obj["message"].is<const char *>() ? obj["message"].as<const char *>() : nullptr;
-    if (!messageValue || messageValue[0] == '\0')
-    {
-      obj["message"] = "Connecting";
-    }
-    return sendJsonResponse(req, 200, response);
-  }
-
-  esp_err_t handleWifiStateGet(httpd_req_t *req)
-  {
-    JsonDocument doc;
-    auto obj = doc.to<JsonObject>();
-    obj["status"] = "ok";
-    wifi_manager::append_state_json(obj);
-    return sendJsonResponse(req, 200, doc);
-  }
-
-  esp_err_t handleTransportGet(httpd_req_t *req)
-  {
-    JsonDocument doc;
-    auto obj = doc.to<JsonObject>();
-    obj["status"] = "ok";
-    obj["mode"] = transportModeToString(activeTransportMode.load());
-    obj["baud"] = uartBaudRate;
-    return sendJsonResponse(req, 200, doc);
-  }
-
-  esp_err_t handleTransportPost(httpd_req_t *req)
-  {
-    if (req->method != HTTP_POST)
-    {
-      JsonDocument response;
-      auto obj = response.to<JsonObject>();
-      obj["status"] = "error";
-      obj["message"] = "Method not allowed";
-      return sendJsonResponse(req, 405, response);
-    }
-
-    if (req->content_len == 0)
-    {
-      JsonDocument response;
-      auto obj = response.to<JsonObject>();
-      obj["status"] = "error";
-      obj["message"] = "Missing request body";
-      return sendJsonResponse(req, 400, response);
-    }
-
-    std::string body;
-    body.resize(req->content_len);
-    size_t received = 0;
-    if (!body.empty())
-    {
-      char *buffer = &body[0];
-      while (received < body.size())
-      {
-        int ret = httpd_req_recv(req, buffer + received, body.size() - received);
-        if (ret <= 0)
-        {
-          JsonDocument response;
-          auto obj = response.to<JsonObject>();
-          obj["status"] = "error";
-          obj["message"] = "Failed to read body";
-          return sendJsonResponse(req, 400, response);
-        }
-        received += static_cast<size_t>(ret);
-      }
-    }
-    body.push_back('\0');
-
-    JsonDocument payload;
-    DeserializationError error = deserializeJson(payload, body.c_str());
-    if (error)
-    {
-      JsonDocument response;
-      auto obj = response.to<JsonObject>();
-      obj["status"] = "error";
-      obj["message"] = "Invalid JSON";
-      return sendJsonResponse(req, 400, response);
-    }
-
-    const char *modeValue = payload["mode"] | "uart";
-    TransportMode requestedMode = stringToTransportMode(modeValue);
-
-    uint32_t requestedBaud = uartBaudRate;
-    if (!payload["baud"].isNull())
-    {
-      int baudCandidate = payload["baud"].as<int>();
-      if (baudCandidate < 9600 || baudCandidate > 921600)
-      {
-        JsonDocument response;
-        auto obj = response.to<JsonObject>();
-        obj["status"] = "error";
-        obj["message"] = "Invalid baud rate";
-        return sendJsonResponse(req, 400, response);
-      }
-      requestedBaud = static_cast<uint32_t>(baudCandidate);
-    }
-
-    if (requestedMode == TransportMode::Uart)
-    {
-      applyUartBaudRate(requestedBaud);
-    }
-
-    if (!applyTransportMode(requestedMode))
-    {
-      JsonDocument response;
-      auto obj = response.to<JsonObject>();
-      obj["status"] = "error";
-      obj["message"] = "Failed to apply transport mode";
-      return sendJsonResponse(req, 500, response);
-    }
-
-    if (!saveTransportConfig(activeTransportMode.load(), uartBaudRate))
-    {
-      JsonDocument response;
-      auto obj = response.to<JsonObject>();
-      obj["status"] = "error";
-      obj["message"] = "Failed to persist transport";
-      return sendJsonResponse(req, 500, response);
-    }
-
-    JsonDocument response;
-    auto obj = response.to<JsonObject>();
-    obj["status"] = "ok";
-    obj["mode"] = transportModeToString(activeTransportMode.load());
-    obj["baud"] = uartBaudRate;
-    return sendJsonResponse(req, 200, response);
-  }
-
-  void registerHttpEndpoints(httpd_handle_t server)
-  {
-    if (!server)
-    {
-      return;
-    }
-
-    static const httpd_uri_t indexUri = {
-        .uri = "/",
-        .method = HTTP_GET,
-        .handler = handleIndex,
-        .user_ctx = nullptr,
-        .is_websocket = false,
-        .handle_ws_control_frames = false,
-        .supported_subprotocol = nullptr};
-
-    static const httpd_uri_t indexHtmlUri = {
-        .uri = "/index.html",
-        .method = HTTP_GET,
-        .handler = handleIndex,
-        .user_ctx = nullptr,
-        .is_websocket = false,
-        .handle_ws_control_frames = false,
-        .supported_subprotocol = nullptr};
-
-    static const httpd_uri_t scanUri = {
-        .uri = "/scan",
-        .method = HTTP_GET,
-        .handler = handleScan,
-        .user_ctx = nullptr,
-        .is_websocket = false,
-        .handle_ws_control_frames = false,
-        .supported_subprotocol = nullptr};
-
-    static const httpd_uri_t configureUri = {
-        .uri = "/configure",
-        .method = HTTP_POST,
-        .handler = handleConfigure,
-        .user_ctx = nullptr,
-        .is_websocket = false,
-        .handle_ws_control_frames = false,
-        .supported_subprotocol = nullptr};
-
-    static const httpd_uri_t wifiStateGetUri = {
-        .uri = "/api/wifi/state",
-        .method = HTTP_GET,
-        .handler = handleWifiStateGet,
-        .user_ctx = nullptr,
-        .is_websocket = false,
-        .handle_ws_control_frames = false,
-        .supported_subprotocol = nullptr};
-
-    static const httpd_uri_t transportGetUri = {
-        .uri = "/api/transport",
-        .method = HTTP_GET,
-        .handler = handleTransportGet,
-        .user_ctx = nullptr,
-        .is_websocket = false,
-        .handle_ws_control_frames = false,
-        .supported_subprotocol = nullptr};
-
-    static const httpd_uri_t transportPostUri = {
-        .uri = "/api/transport",
-        .method = HTTP_POST,
-        .handler = handleTransportPost,
-        .user_ctx = nullptr,
-        .is_websocket = false,
-        .handle_ws_control_frames = false,
-        .supported_subprotocol = nullptr};
-
-    static const httpd_uri_t androidPortalUri = {
-        .uri = "/generate_204",
-        .method = HTTP_GET,
-        .handler = handleIndex,
-        .user_ctx = nullptr,
-        .is_websocket = false,
-        .handle_ws_control_frames = false,
-        .supported_subprotocol = nullptr};
-
-    static const httpd_uri_t applePortalUri = {
-        .uri = "/hotspot-detect.html",
-        .method = HTTP_GET,
-        .handler = handleIndex,
-        .user_ctx = nullptr,
-        .is_websocket = false,
-        .handle_ws_control_frames = false,
-        .supported_subprotocol = nullptr};
-
-    static const httpd_uri_t windowsPortalUri = {
-        .uri = "/ncsi.txt",
-        .method = HTTP_GET,
-        .handler = handleIndex,
-        .user_ctx = nullptr,
-        .is_websocket = false,
-        .handle_ws_control_frames = false,
-        .supported_subprotocol = nullptr};
-
-    httpd_register_uri_handler(server, &indexUri);
-    httpd_register_uri_handler(server, &indexHtmlUri);
-    httpd_register_uri_handler(server, &scanUri);
-    httpd_register_uri_handler(server, &configureUri);
-    httpd_register_uri_handler(server, &wifiStateGetUri);
-    httpd_register_uri_handler(server, &transportGetUri);
-    httpd_register_uri_handler(server, &transportPostUri);
-    httpd_register_uri_handler(server, &androidPortalUri);
-    httpd_register_uri_handler(server, &applePortalUri);
-    httpd_register_uri_handler(server, &windowsPortalUri);
-
-    httpd_register_err_handler(server, HTTPD_404_NOT_FOUND, handleHttp404);
-
-    static const httpd_uri_t wsUri = {
-        .uri = "/ws",
-        .method = HTTP_GET,
-        .handler = handleWebSocket,
-        .user_ctx = nullptr,
-        .is_websocket = true,
-        .handle_ws_control_frames = true,
-        .supported_subprotocol = nullptr};
-
-    static const httpd_uri_t wsHidUri = {
-        .uri = "/ws/hid",
-        .method = HTTP_GET,
-        .handler = handleWebSocket,
-        .user_ctx = nullptr,
-        .is_websocket = true,
-        .handle_ws_control_frames = true,
-        .supported_subprotocol = nullptr};
-
-    httpd_register_uri_handler(server, &wsUri);
-    httpd_register_uri_handler(server, &wsHidUri);
-  }
-
-  esp_err_t handleWebSocket(httpd_req_t *req)
-  {
-    if (activeTransportMode.load() != TransportMode::Websocket)
-    {
-      httpd_resp_set_status(req, HTTP_STATUS_SERVICE_UNAVAILABLE);
-      return httpd_resp_send(req, "WebSocket disabled", HTTPD_RESP_USE_STRLEN);
-    }
-
-    if (req->method == HTTP_GET)
-    {
-      wsClientSocket = httpd_req_to_sockfd(req);
-      wifi_manager::send_cached_state();
-      return ESP_OK;
-    }
-
-    httpd_ws_frame_t frame = {};
-    esp_err_t ret = httpd_ws_recv_frame(req, &frame, 0);
-    if (ret != ESP_OK)
-    {
-      return ret;
-    }
-
-    std::vector<uint8_t> payload(frame.len + 1);
-    frame.payload = payload.data();
-    ret = httpd_ws_recv_frame(req, &frame, frame.len);
-    if (ret != ESP_OK)
-    {
-      return ret;
-    }
-    payload[frame.len] = '\0';
-
-    if (activeTransportMode.load() != TransportMode::Websocket)
-    {
-      httpd_resp_set_status(req, HTTP_STATUS_SERVICE_UNAVAILABLE);
-      return httpd_resp_send(req, "WebSocket disabled", HTTPD_RESP_USE_STRLEN);
-    }
-
-    if (!ensureTransportQueues())
-    {
-      return httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Queue unavailable");
-    }
-
-    switch (frame.type)
-    {
-    case HTTPD_WS_TYPE_TEXT:
-      if (frame.len >= INPUT_BUFFER_LIMIT)
-      {
-        sendStatusError("JSON payload too large");
-        return ESP_OK;
-      }
-      enqueueTransportMessage(transportCommandQueue,
-                              reinterpret_cast<const char *>(frame.payload),
-                              frame.len);
-      break;
-    case HTTPD_WS_TYPE_CLOSE:
-      wsClientSocket = -1;
-      break;
-    case HTTPD_WS_TYPE_PING:
-      frame.type = HTTPD_WS_TYPE_PONG;
-      httpd_ws_send_frame(req, &frame);
-      break;
-    default:
-      break;
-    }
-
-    return ESP_OK;
-  }
-
-  void httpServerTask(void *param)
-  {
-    httpd_config_t config = HTTPD_DEFAULT_CONFIG();
-    config.server_port = HTTP_PORT;
-    config.ctrl_port = HTTP_PORT + 1;
-    config.task_priority = tskIDLE_PRIORITY + 4;
-    config.stack_size = 8192;
-    config.lru_purge_enable = true;
-    config.uri_match_fn = httpd_uri_match_wildcard;
-#if defined(CONFIG_FREERTOS_UNICORE) && CONFIG_FREERTOS_UNICORE
-    config.core_id = 0;
-#else
-    config.core_id = kHttpTaskCore;
-#endif
-
-    httpd_handle_t server = nullptr;
-    if (httpd_start(&server, &config) == ESP_OK)
-    {
-      httpServerHandle = server;
-      registerHttpEndpoints(server);
-    }
-
-    for (;;)
-    {
-      if (activeTransportMode.load() == TransportMode::Websocket && transportEventQueue)
-      {
-        TransportMessage message = {};
-        if (xQueueReceive(transportEventQueue, &message, pdMS_TO_TICKS(100)) == pdPASS)
-        {
-          if (server && wsClientSocket >= 0)
-          {
-            httpd_ws_frame_t frame = {};
-            frame.type = HTTPD_WS_TYPE_TEXT;
-            frame.payload = reinterpret_cast<uint8_t *>(message.payload);
-            frame.len = message.length;
-            esp_err_t err = httpd_ws_send_frame_async(server, wsClientSocket, &frame);
-            if (err != ESP_OK)
-            {
-              wsClientSocket = -1;
-              xQueueSendToFront(transportEventQueue, &message, 0);
-              vTaskDelay(pdMS_TO_TICKS(50));
-            }
-          }
-          else
-          {
-            xQueueSendToFront(transportEventQueue, &message, 0);
-            vTaskDelay(pdMS_TO_TICKS(50));
-          }
-        }
-      }
-      else
-      {
-        vTaskDelay(pdMS_TO_TICKS(100));
-      }
-    }
-  }
-
-  void startHttpServerTask()
-  {
-    if (httpServerTaskHandle)
-    {
-      return;
-    }
-
-    constexpr uint32_t stackSize = 8192;
-    constexpr UBaseType_t priority = tskIDLE_PRIORITY + 3;
-#if defined(CONFIG_FREERTOS_UNICORE) && CONFIG_FREERTOS_UNICORE
-    xTaskCreate(httpServerTask, "http_ws_task", stackSize, nullptr, priority, &httpServerTaskHandle);
-#else
-    xTaskCreatePinnedToCore(httpServerTask,
-                            "http_ws_task",
-                            stackSize,
-                            nullptr,
-                            priority,
-                            &httpServerTaskHandle,
-                            kHttpTaskCore);
-#endif
   }
 
   void transportPumpTask(void *param)
@@ -2123,7 +1497,23 @@ void setup()
     sendStatusError("Falling back to UART transport");
   }
 
-  startHttpServerTask();
+  http_server::Dependencies httpDependencies;
+  httpDependencies.command_queue = &transportCommandQueue;
+  httpDependencies.event_queue = &transportEventQueue;
+  httpDependencies.ensure_transport_queues = ensureTransportQueues;
+  httpDependencies.enqueue_transport_message = enqueueTransportMessage;
+  httpDependencies.get_active_transport_mode = getActiveTransportMode;
+  httpDependencies.transport_mode_to_string = transportModeToString;
+  httpDependencies.string_to_transport_mode = stringToTransportMode;
+  httpDependencies.apply_uart_baud_rate = applyUartBaudRate;
+  httpDependencies.get_uart_baud_rate = getCurrentUartBaudRate;
+  httpDependencies.apply_transport_mode = applyTransportMode;
+  httpDependencies.save_transport_config = saveTransportConfig;
+  httpDependencies.send_status_error = sendStatusError;
+  httpDependencies.send_event = sendEvent;
+  httpDependencies.input_buffer_limit = INPUT_BUFFER_LIMIT;
+  http_server::init(httpDependencies);
+  http_server::start();
   startTransportPumpTask();
   wifi_manager::Callbacks callbacks;
   callbacks.dispatch_transport_json = dispatchTransportJson;
