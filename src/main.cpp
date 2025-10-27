@@ -93,6 +93,8 @@ namespace
   TransportMode stringToTransportMode(const char *value);
   esp_err_t handleTransportGet(httpd_req_t *req);
   esp_err_t handleTransportPost(httpd_req_t *req);
+  void sendStatusOk();
+  void sendStatusError(const char *message);
   void sendEvent(const char *name, const char *detail = nullptr);
   void publishWifiState(const char *state, const char *ssid = nullptr, const char *message = "");
   void sendCachedWifiState();
@@ -857,7 +859,7 @@ namespace
     if (err != ESP_OK)
     {
       restoreApModeAfterTemporarySta();
-      DynamicJsonDocument response(160);
+      JsonDocument response(160);
       response["status"] = "error";
       response["message"] = "Scan failed";
       response["code"] = static_cast<int>(err);
@@ -869,7 +871,7 @@ namespace
     if (countErr != ESP_OK)
     {
       restoreApModeAfterTemporarySta();
-      DynamicJsonDocument response(160);
+      JsonDocument response(160);
       response["status"] = "error";
       response["message"] = "Unable to read scan results";
       response["code"] = static_cast<int>(countErr);
@@ -887,8 +889,8 @@ namespace
 
     const size_t maxNetworks = 20;
     const size_t visibleNetworks = std::min(records.size(), maxNetworks);
-    DynamicJsonDocument doc(256 + visibleNetworks * 96);
-    JsonArray networks = doc.createNestedArray("networks");
+    JsonDocument doc(256 + visibleNetworks * 96);
+    JsonArray networks = doc["networks"].to<JsonArray>();
     size_t added = 0;
     for (const auto &record : records)
     {
@@ -897,7 +899,7 @@ namespace
         break;
       }
 
-      JsonObject network = networks.createNestedObject();
+      JsonObject network = networks.add<JsonObject>();
       network["ssid"] = reinterpret_cast<const char *>(record.ssid);
       network["rssi"] = record.rssi;
       network["channel"] = record.primary;
@@ -914,7 +916,7 @@ namespace
   {
     if (req->method != HTTP_POST)
     {
-      DynamicJsonDocument response(128);
+      JsonDocument response(128);
       response["status"] = "error";
       response["message"] = "Method not allowed";
       return sendJsonResponse(req, 405, response);
@@ -922,7 +924,7 @@ namespace
 
     if (req->content_len == 0)
     {
-      DynamicJsonDocument response(128);
+      JsonDocument response(128);
       response["status"] = "error";
       response["message"] = "Missing request body";
       return sendJsonResponse(req, 400, response);
@@ -939,7 +941,7 @@ namespace
         int ret = httpd_req_recv(req, buffer + received, body.size() - received);
         if (ret <= 0)
         {
-          DynamicJsonDocument response(128);
+          JsonDocument response(128);
           response["status"] = "error";
           response["message"] = "Failed to read body";
           return sendJsonResponse(req, 400, response);
@@ -949,11 +951,11 @@ namespace
     }
     body.push_back('\0');
 
-    StaticJsonDocument<256> payload;
+    JsonDocument payload(256);
     DeserializationError error = deserializeJson(payload, body.c_str());
     if (error)
     {
-      DynamicJsonDocument response(128);
+      JsonDocument response(128);
       response["status"] = "error";
       response["message"] = "Invalid JSON";
       return sendJsonResponse(req, 400, response);
@@ -965,7 +967,7 @@ namespace
 
     if (ssid.isEmpty())
     {
-      DynamicJsonDocument response(128);
+      JsonDocument response(128);
       response["status"] = "error";
       response["message"] = "SSID is required";
       return sendJsonResponse(req, 400, response);
@@ -978,16 +980,16 @@ namespace
 
     bool connected = connectStationAndPersist(ssid, password, true);
 
-    DynamicJsonDocument response(192);
+    JsonDocument response(192);
     appendWifiStateJson(response);
     if (connected)
     {
       response["status"] = "ok";
-      if (!response.containsKey("ssid"))
+      if (response["ssid"].isNull())
       {
         response["ssid"] = ssid;
       }
-      const char *messageValue = response.containsKey("message") ? response["message"].as<const char *>() : nullptr;
+      const char *messageValue = response["message"].is<const char *>() ? response["message"].as<const char *>() : nullptr;
       if (!messageValue || messageValue[0] == '\0')
       {
         response["message"] = "Connected";
@@ -997,11 +999,11 @@ namespace
     else
     {
       response["status"] = "error";
-      if (!response.containsKey("ssid"))
+      if (response["ssid"].isNull())
       {
         response["ssid"] = ssid;
       }
-      const char *messageValue = response.containsKey("message") ? response["message"].as<const char *>() : nullptr;
+      const char *messageValue = response["message"].is<const char *>() ? response["message"].as<const char *>() : nullptr;
       if (!messageValue || messageValue[0] == '\0')
       {
         response["message"] = "Failed to connect";
@@ -1017,7 +1019,7 @@ namespace
 
   esp_err_t handleWifiStateGet(httpd_req_t *req)
   {
-    DynamicJsonDocument doc(192);
+    JsonDocument doc(192);
     doc["status"] = "ok";
     appendWifiStateJson(doc);
     return sendJsonResponse(req, 200, doc);
@@ -1025,7 +1027,7 @@ namespace
 
   esp_err_t handleTransportGet(httpd_req_t *req)
   {
-    DynamicJsonDocument doc(160);
+    JsonDocument doc(160);
     doc["status"] = "ok";
     doc["mode"] = transportModeToString(activeTransportMode.load());
     doc["baud"] = uartBaudRate;
@@ -1036,7 +1038,7 @@ namespace
   {
     if (req->method != HTTP_POST)
     {
-      DynamicJsonDocument response(128);
+      JsonDocument response(128);
       response["status"] = "error";
       response["message"] = "Method not allowed";
       return sendJsonResponse(req, 405, response);
@@ -1044,7 +1046,7 @@ namespace
 
     if (req->content_len == 0)
     {
-      DynamicJsonDocument response(128);
+      JsonDocument response(128);
       response["status"] = "error";
       response["message"] = "Missing request body";
       return sendJsonResponse(req, 400, response);
@@ -1061,7 +1063,7 @@ namespace
         int ret = httpd_req_recv(req, buffer + received, body.size() - received);
         if (ret <= 0)
         {
-          DynamicJsonDocument response(128);
+          JsonDocument response(128);
           response["status"] = "error";
           response["message"] = "Failed to read body";
           return sendJsonResponse(req, 400, response);
@@ -1071,11 +1073,11 @@ namespace
     }
     body.push_back('\0');
 
-    StaticJsonDocument<160> payload;
+    JsonDocument payload(160);
     DeserializationError error = deserializeJson(payload, body.c_str());
     if (error)
     {
-      DynamicJsonDocument response(128);
+      JsonDocument response(128);
       response["status"] = "error";
       response["message"] = "Invalid JSON";
       return sendJsonResponse(req, 400, response);
@@ -1090,7 +1092,7 @@ namespace
       int baudCandidate = payload["baud"].as<int>();
       if (baudCandidate < 9600 || baudCandidate > 921600)
       {
-        DynamicJsonDocument response(160);
+        JsonDocument response(160);
         response["status"] = "error";
         response["message"] = "Invalid baud rate";
         return sendJsonResponse(req, 400, response);
@@ -1105,7 +1107,7 @@ namespace
 
     if (!applyTransportMode(requestedMode))
     {
-      DynamicJsonDocument response(160);
+      JsonDocument response(160);
       response["status"] = "error";
       response["message"] = "Failed to apply transport mode";
       return sendJsonResponse(req, 500, response);
@@ -1113,13 +1115,13 @@ namespace
 
     if (!saveTransportConfig(activeTransportMode.load(), uartBaudRate))
     {
-      DynamicJsonDocument response(160);
+      JsonDocument response(160);
       response["status"] = "error";
       response["message"] = "Failed to persist transport";
       return sendJsonResponse(req, 500, response);
     }
 
-    DynamicJsonDocument response(160);
+    JsonDocument response(160);
     response["status"] = "ok";
     response["mode"] = transportModeToString(activeTransportMode.load());
     response["baud"] = uartBaudRate;
@@ -1580,7 +1582,7 @@ namespace
     dispatchTransportJson(payload);
   }
 
-  void sendEvent(const char *name, const char *detail = nullptr)
+  void sendEvent(const char *name, const char *detail)
   {
     String payload = F("{\"event\":\"");
     payload += name;
