@@ -690,17 +690,37 @@ namespace
     return httpd_resp_send(req, payload.c_str(), HTTPD_RESP_USE_STRLEN);
   }
 
-  void startCaptivePortalServices()
+  bool startCaptivePortalServices()
   {
     if (dnsServerActive)
     {
       dnsServer.stop();
+      dnsServerActive = false;
     }
 
     dnsServer.setErrorReplyCode(DNSReplyCode::NoError);
+
     IPAddress apIp = WiFi.softAPIP();
-    dnsServer.start(DNS_PORT, "*", apIp);
+    const IPAddress invalidIp(0, 0, 0, 0);
+    unsigned long waitStart = millis();
+    while (apIp == invalidIp && (millis() - waitStart) < 1000)
+    {
+      delay(10);
+      apIp = WiFi.softAPIP();
+    }
+
+    if (apIp == invalidIp)
+    {
+      return false;
+    }
+
+    if (!dnsServer.start(DNS_PORT, "*", apIp))
+    {
+      return false;
+    }
+
     dnsServerActive = true;
+    return true;
   }
 
   void stopCaptivePortalServices()
@@ -776,14 +796,25 @@ namespace
     {
       wifiCurrentMode = currentMode;
     }
+    else if (wifiCurrentMode == WIFI_MODE_NULL && wifiTargetMode != WIFI_MODE_NULL)
+    {
+      if (WiFi.mode(wifiTargetMode))
+      {
+        wifiCurrentMode = wifiTargetMode;
+      }
+    }
 
     if (wifiCurrentMode == WIFI_MODE_NULL)
     {
       return false;
     }
 
+    auto wifiStartedSuccessfully = [](esp_err_t err) {
+      return err == ESP_OK || err == ESP_ERR_WIFI_STATE || err == ESP_ERR_INVALID_STATE;
+    };
+
     esp_err_t err = esp_wifi_start();
-    if (err == ESP_OK || err == ESP_ERR_WIFI_STATE)
+    if (wifiStartedSuccessfully(err))
     {
       return true;
     }
@@ -796,7 +827,7 @@ namespace
         return false;
       }
       err = esp_wifi_start();
-      return err == ESP_OK || err == ESP_ERR_WIFI_STATE;
+      return wifiStartedSuccessfully(err);
     }
 
     return false;
@@ -1571,12 +1602,46 @@ namespace
   {
     apShutdownPending = false;
     ensureApOnlyMode();
+
+    auto reportApFailure = [](const char *message) {
+      stopCaptivePortalServices();
+      WiFi.softAPdisconnect(true);
+      configurationMode = false;
+      if (message && *message)
+      {
+        publishWifiState("failed", nullptr, message);
+        sendStatusError(message);
+      }
+    };
+
+    if (!ensureWifiStarted())
+    {
+      reportApFailure("Failed to start WiFi for access point");
+      return;
+    }
+
     IPAddress localIp(192, 168, 4, 1);
     IPAddress gateway(192, 168, 4, 1);
     IPAddress subnet(255, 255, 255, 0);
-    WiFi.softAPConfig(localIp, gateway, subnet);
-    WiFi.softAP(CONFIG_AP_SSID, CONFIG_AP_PASSWORD);
-    startCaptivePortalServices();
+
+    if (!WiFi.softAPConfig(localIp, gateway, subnet))
+    {
+      reportApFailure("Failed to configure access point network");
+      return;
+    }
+
+    if (!WiFi.softAP(CONFIG_AP_SSID, CONFIG_AP_PASSWORD))
+    {
+      reportApFailure("Failed to start access point");
+      return;
+    }
+
+    if (!startCaptivePortalServices())
+    {
+      reportApFailure("Failed to start captive portal services");
+      return;
+    }
+
     configurationMode = true;
   }
 
