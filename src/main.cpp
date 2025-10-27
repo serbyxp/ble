@@ -44,6 +44,7 @@ constexpr const char *CONFIG_AP_SSID = "uhid-setup";
 constexpr const char *CONFIG_AP_PASSWORD = "uhid1234";
 constexpr uint16_t DNS_PORT = 53;
 constexpr uint16_t HTTP_PORT = 80;
+constexpr const char *HTTP_STATUS_SERVICE_UNAVAILABLE = "503 Service Unavailable";
 
 DNSServer dnsServer;
 bool dnsServerActive = false;
@@ -1238,7 +1239,8 @@ esp_err_t handleWebSocket(httpd_req_t *req)
 {
   if (activeTransportMode.load() != TransportMode::Websocket)
   {
-    return httpd_resp_send_err(req, HTTPD_503_SERVICE_UNAVAILABLE, "WebSocket disabled");
+    httpd_resp_set_status(req, HTTP_STATUS_SERVICE_UNAVAILABLE);
+    return httpd_resp_send(req, "WebSocket disabled", HTTPD_RESP_USE_STRLEN);
   }
 
   if (req->method == HTTP_GET)
@@ -1266,7 +1268,8 @@ esp_err_t handleWebSocket(httpd_req_t *req)
 
   if (activeTransportMode.load() != TransportMode::Websocket)
   {
-    return httpd_resp_send_err(req, HTTPD_503_SERVICE_UNAVAILABLE, "WebSocket disabled");
+    httpd_resp_set_status(req, HTTP_STATUS_SERVICE_UNAVAILABLE);
+    return httpd_resp_send(req, "WebSocket disabled", HTTPD_RESP_USE_STRLEN);
   }
 
   if (!ensureTransportQueues())
