@@ -536,6 +536,9 @@ namespace wifi_manager
 
       publish_wifi_state("connecting", ssid.c_str());
 
+      bool restore_ap_after_unlock = false;
+      bool start_failed = false;
+
       {
         WifiStateLock lock = lock_state();
         state_.ap_shutdown_pending = false;
@@ -555,17 +558,28 @@ namespace wifi_manager
           if (keep_ap_active)
           {
             // Restore AP state when we fail to start the STA interface.
-            start_ap();
+            restore_ap_after_unlock = true;
           }
           else
           {
             WiFi.disconnect();
           }
-          publish_wifi_state("failed", ssid.c_str(), "Failed to start WiFi");
-          return false;
+          publish_wifi_state_locked("failed", ssid.c_str(), "Failed to start WiFi");
+          start_failed = true;
         }
+        else
+        {
+          state_.sta_connect_in_progress = true;
+        }
+      }
 
-        state_.sta_connect_in_progress = true;
+      if (start_failed)
+      {
+        if (restore_ap_after_unlock)
+        {
+          start_ap();
+        }
+        return false;
       }
 
       WiFi.begin(ssid.c_str(), password.c_str());
@@ -947,7 +961,7 @@ namespace wifi_manager
     {
     case ARDUINO_EVENT_WIFI_STA_GOT_IP:
       state_.sta_connect_in_progress = false;
-      publish_wifi_state("connected", WiFi.SSID().c_str());
+      publish_wifi_state_locked("connected", WiFi.SSID().c_str());
       schedule_sta_only_transition();
       break;
     case ARDUINO_EVENT_WIFI_STA_DISCONNECTED:
@@ -956,7 +970,7 @@ namespace wifi_manager
       uint8_t reason = info.wifi_sta_disconnected.reason;
       String message = F("Disconnect reason ");
       message += String(reason);
-      publish_wifi_state("failed", nullptr, message.c_str());
+      publish_wifi_state_locked("failed", nullptr, message.c_str());
       break;
     }
     default:
@@ -967,7 +981,7 @@ namespace wifi_manager
     {
     case SYSTEM_EVENT_STA_GOT_IP:
       state_.sta_connect_in_progress = false;
-      publish_wifi_state("connected", WiFi.SSID().c_str());
+      publish_wifi_state_locked("connected", WiFi.SSID().c_str());
       schedule_sta_only_transition();
       break;
     case SYSTEM_EVENT_STA_DISCONNECTED:
@@ -976,7 +990,7 @@ namespace wifi_manager
       uint8_t reason = info.disconnected.reason;
       String message = F("Disconnect reason ");
       message += String(reason);
-      publish_wifi_state("failed", nullptr, message.c_str());
+      publish_wifi_state_locked("failed", nullptr, message.c_str());
       break;
     }
     default:
