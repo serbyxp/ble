@@ -167,6 +167,11 @@ class ConfigPayload(BaseModel):
     baud: int = Field(DEFAULT_BAUD, ge=1200, le=921600)
 
 
+class WifiConfigurePayload(BaseModel):
+    ssid: str
+    password: Optional[str] = ""
+
+
 app = FastAPI(title="UART HID Control")
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
@@ -198,6 +203,22 @@ def get_config() -> dict:
 def set_config(payload: ConfigPayload) -> dict:
     bridge.connect(payload.port, payload.baud)
     return {"status": "ok", "port": bridge.port, "baud": bridge.baud}
+
+
+@app.get("/scan")
+def wifi_scan_placeholder() -> dict:
+    """Stub endpoint so the web UI can render without the firmware portal."""
+
+    return {"status": "unavailable", "networks": []}
+
+
+@app.post("/configure")
+def wifi_configure_placeholder(payload: WifiConfigurePayload) -> dict:
+    return {
+        "status": "error",
+        "message": "Wi-Fi configuration is handled directly on the ESP32 firmware",
+        "ssid": payload.ssid,
+    }
 
 
 @app.post("/api/text")
