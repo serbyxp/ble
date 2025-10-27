@@ -1115,11 +1115,6 @@ namespace
       return sendJsonResponse(req, 400, response);
     }
 
-    if (!configurationMode)
-    {
-      startAccessPoint();
-    }
-
     if (wifiConnectBusy.load() || (wifiConnectRequestQueue && uxQueueMessagesWaiting(wifiConnectRequestQueue) > 0))
     {
       JsonDocument response;
@@ -1127,6 +1122,11 @@ namespace
       obj["status"] = "error";
       obj["message"] = "A WiFi connection attempt is already in progress";
       return sendJsonResponse(req, 409, response);
+    }
+
+    if (!configurationMode)
+    {
+      startAccessPoint();
     }
 
     if (!scheduleWifiConnect(ssid, password, false))
