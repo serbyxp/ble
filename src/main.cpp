@@ -328,10 +328,8 @@ namespace
         src_web_index_html_end - src_web_index_html_start);
   }
 
-
   String inputBuffer;
   bool lastBleConnectionState = false;
-
 
   struct NamedCode
   {
