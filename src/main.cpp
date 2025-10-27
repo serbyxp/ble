@@ -1571,11 +1571,40 @@ namespace
   {
     apShutdownPending = false;
     ensureApOnlyMode();
+
+    auto reportApFailure = [](const char *message) {
+      stopCaptivePortalServices();
+      WiFi.softAPdisconnect(true);
+      configurationMode = false;
+      if (message && *message)
+      {
+        publishWifiState("failed", nullptr, message);
+        sendStatusError(message);
+      }
+    };
+
+    if (!ensureWifiStarted())
+    {
+      reportApFailure("Failed to start WiFi for access point");
+      return;
+    }
+
     IPAddress localIp(192, 168, 4, 1);
     IPAddress gateway(192, 168, 4, 1);
     IPAddress subnet(255, 255, 255, 0);
-    WiFi.softAPConfig(localIp, gateway, subnet);
-    WiFi.softAP(CONFIG_AP_SSID, CONFIG_AP_PASSWORD);
+
+    if (!WiFi.softAPConfig(localIp, gateway, subnet))
+    {
+      reportApFailure("Failed to configure access point network");
+      return;
+    }
+
+    if (!WiFi.softAP(CONFIG_AP_SSID, CONFIG_AP_PASSWORD))
+    {
+      reportApFailure("Failed to start access point");
+      return;
+    }
+
     startCaptivePortalServices();
     configurationMode = true;
   }
