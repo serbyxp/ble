@@ -9,88 +9,88 @@
 
 namespace
 {
-constexpr UBaseType_t COMMAND_QUEUE_LENGTH = 8;
+  constexpr UBaseType_t COMMAND_QUEUE_LENGTH = 8;
 
-QueueHandle_t g_commandQueue = nullptr;
-BleCommandProcessor g_processor;
+  QueueHandle_t g_commandQueue = nullptr;
+  BleCommandProcessor g_processor;
 
-void sendInputTooLong()
-{
-  Serial.println(F("{\"status\":\"error\",\"message\":\"Input too long\"}"));
-}
-
-void sendQueueFull()
-{
-  Serial.println(F("{\"status\":\"error\",\"message\":\"Command queue full\"}"));
-}
-
-void transportTask(void *)
-{
-  String buffer;
-  buffer.reserve(COMMAND_MESSAGE_MAX_LENGTH);
-
-  websocketTransportBegin(g_commandQueue);
-
-  for (;;)
+  void sendInputTooLong()
   {
-    while (Serial.available())
+    Serial.println(F("{\"status\":\"error\",\"message\":\"Input too long\"}"));
+  }
+
+  void sendQueueFull()
+  {
+    Serial.println(F("{\"status\":\"error\",\"message\":\"Command queue full\"}"));
+  }
+
+  void transportTask(void *)
+  {
+    String buffer;
+    buffer.reserve(COMMAND_MESSAGE_MAX_LENGTH);
+
+    websocketTransportBegin(g_commandQueue);
+
+    for (;;)
     {
-      char c = static_cast<char>(Serial.read());
-
-      if (c == '\r')
+      while (Serial.available())
       {
-        continue;
-      }
+        char c = static_cast<char>(Serial.read());
 
-      if (c == '\n')
-      {
-        if (buffer.length() > 0)
+        if (c == '\r')
         {
-          CommandMessage message;
-          message.length = buffer.length();
-          buffer.toCharArray(message.payload, COMMAND_MESSAGE_MAX_LENGTH + 1);
-          message.payload[message.length] = '\0';
-          if (xQueueSend(g_commandQueue, &message, 0) != pdPASS)
-          {
-            sendQueueFull();
-          }
-          buffer = "";
+          continue;
         }
-        continue;
+
+        if (c == '\n')
+        {
+          if (buffer.length() > 0)
+          {
+            CommandMessage message;
+            message.length = buffer.length();
+            buffer.toCharArray(message.payload, COMMAND_MESSAGE_MAX_LENGTH + 1);
+            message.payload[message.length] = '\0';
+            if (xQueueSend(g_commandQueue, &message, 0) != pdPASS)
+            {
+              sendQueueFull();
+            }
+            buffer = "";
+          }
+          continue;
+        }
+
+        if (buffer.length() >= COMMAND_MESSAGE_MAX_LENGTH)
+        {
+          sendInputTooLong();
+          buffer = "";
+          continue;
+        }
+
+        buffer += c;
       }
 
-      if (buffer.length() >= COMMAND_MESSAGE_MAX_LENGTH)
-      {
-        sendInputTooLong();
-        buffer = "";
-        continue;
-      }
-
-      buffer += c;
+      websocketTransportLoop();
+      vTaskDelay(pdMS_TO_TICKS(2));
     }
-
-    websocketTransportLoop();
-    vTaskDelay(pdMS_TO_TICKS(2));
   }
-}
 
-void bleTask(void *)
-{
-  g_processor.begin();
-  g_processor.sendReadyEvent();
-
-  for (;;)
+  void bleTask(void *)
   {
-    CommandMessage message;
-    if (xQueueReceive(g_commandQueue, &message, pdMS_TO_TICKS(10)) == pdPASS)
-    {
-      g_processor.handleCommand(message);
-    }
+    g_processor.begin();
+    g_processor.sendReadyEvent();
 
-    g_processor.pollConnection();
-    vTaskDelay(pdMS_TO_TICKS(2));
+    for (;;)
+    {
+      CommandMessage message;
+      if (xQueueReceive(g_commandQueue, &message, pdMS_TO_TICKS(10)) == pdPASS)
+      {
+        g_processor.handleCommand(message);
+      }
+
+      g_processor.pollConnection();
+      vTaskDelay(pdMS_TO_TICKS(2));
+    }
   }
-}
 
 } // namespace
 
@@ -116,4 +116,3 @@ void loop()
 {
   vTaskDelay(pdMS_TO_TICKS(1000));
 }
-
