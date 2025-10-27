@@ -766,7 +766,7 @@
             const message = data && data.message ? data.message : `${response.status} ${response.statusText}`;
             throw new Error(message);
           }
-          setWifiStatus(`Connected to ${ssid}. The ESP32 will attempt to join the network.`);
+          setWifiStatus(`Connecting to ${ssid}. The setup network will shut down once the device joins the Wi‑Fi network.`);
         } catch (error) {
           console.error(error);
           setWifiStatus(`Connection failed: ${error instanceof Error ? error.message : String(error)}`, true);

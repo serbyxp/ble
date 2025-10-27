@@ -41,6 +41,8 @@ namespace
   constexpr unsigned long WIFI_AP_SHUTDOWN_DELAY_MS = 3000;
   constexpr const char *CONFIG_AP_SSID = "uhid-setup";
   constexpr const char *CONFIG_AP_PASSWORD = "uhid1234";
+  constexpr size_t WIFI_MAX_SSID_LENGTH = 32;
+  constexpr size_t WIFI_MAX_PASSWORD_LENGTH = 64;
   constexpr uint16_t DNS_PORT = 53;
   constexpr uint16_t HTTP_PORT = 80;
   constexpr const char *HTTP_STATUS_SERVICE_UNAVAILABLE = "503 Service Unavailable";
@@ -64,6 +66,13 @@ namespace
     char payload[INPUT_BUFFER_LIMIT];
   };
 
+  struct WifiConnectRequest
+  {
+    bool keepApActive;
+    char ssid[WIFI_MAX_SSID_LENGTH + 1];
+    char password[WIFI_MAX_PASSWORD_LENGTH + 1];
+  };
+
   constexpr UBaseType_t TRANSPORT_COMMAND_QUEUE_LENGTH = 8;
   constexpr UBaseType_t TRANSPORT_EVENT_QUEUE_LENGTH = 8;
 
@@ -82,7 +91,9 @@ namespace
   void startHttpServerTask();
   void transportPumpTask(void *param);
   void startTransportPumpTask();
+  void wifiConnectTask(void *param);
   bool ensureTransportQueues();
+  bool ensureWifiConnectTask();
   void closeActiveWebsocket();
   void resetTransportQueues();
   bool applyTransportMode(TransportMode mode);
@@ -107,6 +118,8 @@ namespace
   QueueHandle_t transportEventQueue = nullptr;
   TaskHandle_t httpServerTaskHandle = nullptr;
   TaskHandle_t transportPumpTaskHandle = nullptr;
+  QueueHandle_t wifiConnectRequestQueue = nullptr;
+  TaskHandle_t wifiConnectTaskHandle = nullptr;
   httpd_handle_t httpServerHandle = nullptr;
   volatile int wsClientSocket = -1;
 
@@ -176,6 +189,42 @@ namespace
     return transportCommandQueue != nullptr && transportEventQueue != nullptr;
   }
 
+  bool ensureWifiConnectTask()
+  {
+    if (!wifiConnectRequestQueue)
+    {
+      wifiConnectRequestQueue = xQueueCreate(1, sizeof(WifiConnectRequest));
+    }
+
+    if (!wifiConnectRequestQueue)
+    {
+      return false;
+    }
+
+    if (!wifiConnectTaskHandle)
+    {
+      constexpr uint32_t stackSize = 4096;
+      constexpr UBaseType_t priority = tskIDLE_PRIORITY + 1;
+#if defined(CONFIG_FREERTOS_UNICORE) && CONFIG_FREERTOS_UNICORE
+      if (xTaskCreate(wifiConnectTask, "wifi_connect", stackSize, nullptr, priority, &wifiConnectTaskHandle) != pdPASS)
+#else
+      if (xTaskCreatePinnedToCore(wifiConnectTask,
+                                  "wifi_connect",
+                                  stackSize,
+                                  nullptr,
+                                  priority,
+                                  &wifiConnectTaskHandle,
+                                  kHttpTaskCore) != pdPASS)
+#endif
+      {
+        wifiConnectTaskHandle = nullptr;
+        return false;
+      }
+    }
+
+    return true;
+  }
+
   void closeActiveWebsocket()
   {
     if (httpServerHandle && wsClientSocket >= 0)
@@ -195,6 +244,43 @@ namespace
     {
       xQueueReset(transportEventQueue);
     }
+  }
+
+  bool scheduleWifiConnect(const String &ssid, const String &password, bool keepApActive)
+  {
+    if (ssid.isEmpty())
+    {
+      return false;
+    }
+
+    if (wifiConnectBusy.load())
+    {
+      return false;
+    }
+
+    if (!ensureWifiConnectTask())
+    {
+      return false;
+    }
+
+    WifiConnectRequest request = {};
+    request.keepApActive = keepApActive;
+
+    String limitedSsid = ssid;
+    if (limitedSsid.length() > WIFI_MAX_SSID_LENGTH)
+    {
+      limitedSsid = limitedSsid.substring(0, static_cast<int>(WIFI_MAX_SSID_LENGTH));
+    }
+    limitedSsid.toCharArray(request.ssid, sizeof(request.ssid));
+
+    String limitedPassword = password;
+    if (limitedPassword.length() > WIFI_MAX_PASSWORD_LENGTH)
+    {
+      limitedPassword = limitedPassword.substring(0, static_cast<int>(WIFI_MAX_PASSWORD_LENGTH));
+    }
+    limitedPassword.toCharArray(request.password, sizeof(request.password));
+
+    return xQueueSend(wifiConnectRequestQueue, &request, 0) == pdPASS;
   }
 
   const char *transportModeToString(TransportMode mode)
@@ -368,6 +454,8 @@ namespace
   bool apShutdownPending = false;
   unsigned long apShutdownDeadline = 0;
   bool staConnectInProgress = false;
+  std::atomic<bool> wifiConnectBusy{false};
+
 
   struct NamedCode
   {
@@ -1032,44 +1120,41 @@ namespace
       startAccessPoint();
     }
 
-    bool connected = connectStationAndPersist(ssid, password, true);
+    if (wifiConnectBusy.load() || (wifiConnectRequestQueue && uxQueueMessagesWaiting(wifiConnectRequestQueue) > 0))
+    {
+      JsonDocument response;
+      auto obj = response.to<JsonObject>();
+      obj["status"] = "error";
+      obj["message"] = "A WiFi connection attempt is already in progress";
+      return sendJsonResponse(req, 409, response);
+    }
+
+    if (!scheduleWifiConnect(ssid, password, false))
+    {
+      JsonDocument response;
+      auto obj = response.to<JsonObject>();
+      obj["status"] = "error";
+      obj["message"] = "Unable to schedule WiFi connection";
+      return sendJsonResponse(req, 503, response);
+    }
+
+    publishWifiState("connecting", ssid.c_str());
+    sendEvent("wifi_connecting", ssid.c_str());
 
     JsonDocument response;
     auto obj = response.to<JsonObject>();
+    obj["status"] = "ok";
     appendWifiStateJson(obj);
-    if (connected)
+    if (!obj["ssid"].is<const char *>() || obj["ssid"].as<const char *>()[0] == '\0')
     {
-      obj["status"] = "ok";
-      if (obj["ssid"].isNull())
-      {
-        obj["ssid"] = ssid;
-      }
-      const char *messageValue = obj["message"].is<const char *>() ? obj["message"].as<const char *>() : nullptr;
-      if (!messageValue || messageValue[0] == '\0')
-      {
-        obj["message"] = "Connected";
-      }
-      return sendJsonResponse(req, 200, response);
+      obj["ssid"] = ssid;
     }
-    else
+    const char *messageValue = obj["message"].is<const char *>() ? obj["message"].as<const char *>() : nullptr;
+    if (!messageValue || messageValue[0] == '\0')
     {
-      obj["status"] = "error";
-      if (obj["ssid"].isNull())
-      {
-        obj["ssid"] = ssid;
-      }
-      const char *messageValue = obj["message"].is<const char *>() ? obj["message"].as<const char *>() : nullptr;
-      if (!messageValue || messageValue[0] == '\0')
-      {
-        obj["message"] = "Failed to connect";
-      }
-      sendJsonResponse(req, 500, response);
-      if (!configurationMode)
-      {
-        startAccessPoint();
-      }
-      return ESP_OK;
+      obj["message"] = "Connecting";
     }
+    return sendJsonResponse(req, 200, response);
   }
 
   esp_err_t handleWifiStateGet(httpd_req_t *req)
@@ -1559,6 +1644,41 @@ namespace
                             &transportPumpTaskHandle,
                             kHttpTaskCore);
 #endif
+  }
+
+  void wifiConnectTask(void *param)
+  {
+    (void)param;
+
+    for (;;)
+    {
+      WifiConnectRequest request = {};
+      if (wifiConnectRequestQueue &&
+          xQueueReceive(wifiConnectRequestQueue, &request, portMAX_DELAY) == pdPASS)
+      {
+        String ssid = String(request.ssid);
+        String password = String(request.password);
+        bool keepApActive = request.keepApActive;
+
+        wifiConnectBusy.store(true);
+
+        // Give the HTTP handler a moment to finish responding before
+        // altering the WiFi state, so the client reliably receives the
+        // acknowledgement.
+        vTaskDelay(pdMS_TO_TICKS(500));
+
+        bool connected = connectStationAndPersist(ssid, password, keepApActive);
+        wifiConnectBusy.store(false);
+        if (!connected && !keepApActive)
+        {
+          startAccessPoint();
+          if (configurationMode)
+          {
+            sendEvent("wifi_config_mode");
+          }
+        }
+      }
+    }
   }
 
   void stopAccessPoint()
