@@ -81,6 +81,7 @@ namespace wifi_manager
     Callbacks callbacks_;
     WifiManagerState state_;
     SemaphoreHandle_t state_mutex_ = nullptr;
+    bool wifi_events_registered_ = false;
 
     struct WifiConnectRequest
     {
@@ -825,6 +826,11 @@ namespace wifi_manager
     if (!callbacks_.dispatch_transport_json)
     {
       callbacks_.dispatch_transport_json = [](const char *) {};
+    }
+    if (!wifi_events_registered_)
+    {
+      WiFi.onEvent(on_event);
+      wifi_events_registered_ = true;
     }
     ensure_state_mutex();
     WifiStateLock lock = lock_state();

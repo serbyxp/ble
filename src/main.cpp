@@ -7,7 +7,6 @@
 #if __has_include("sdkconfig.h")
 #include <sdkconfig.h>
 #endif
-#include <WiFi.h>
 #include <nvs.h>
 #include <nvs_flash.h>
 #include <pgmspace.h>
@@ -33,6 +32,9 @@ namespace
   constexpr const char *NVS_KEY_TRANSPORT_MODE = "mode";
   constexpr const char *NVS_KEY_UART_BAUD = "baud";
   constexpr uint32_t DEFAULT_UART_BAUD = 115200;
+  constexpr const char *NVS_NAMESPACE_WIFI = "wifi";
+  constexpr const char *NVS_KEY_WIFI_SSID = "ssid";
+  constexpr const char *NVS_KEY_WIFI_PASSWORD = "password";
 #if defined(CONFIG_BT_NIMBLE_PINNED_TO_CORE)
   constexpr BaseType_t kHttpTaskCore = (CONFIG_BT_NIMBLE_PINNED_TO_CORE == 0) ? 1 : 0;
 #elif defined(CONFIG_FREERTOS_UNICORE) && CONFIG_FREERTOS_UNICORE
@@ -54,7 +56,6 @@ namespace
 
   void transportPumpTask(void *param);
   void startTransportPumpTask();
-  void wifiConnectTask(void *param);
   bool ensureTransportQueues();
   void resetTransportQueues();
   bool applyTransportMode(TransportMode mode);
@@ -66,6 +67,8 @@ namespace
   void sendStatusError(const char *message);
   void sendEvent(const char *name, const char *detail = nullptr);
   void applyUartBaudRate(uint32_t baud);
+  bool loadWifiCredentials(String &ssid, String &password);
+  bool saveWifiCredentials(const String &ssid, const String &password);
   void flushInputBuffer();
   void processCommand(const String &payload);
 
@@ -577,6 +580,76 @@ namespace
     dispatchTransportJson(payload);
   }
 
+  bool loadWifiCredentials(String &ssid, String &password)
+  {
+    nvs_handle_t handle;
+    esp_err_t err = nvs_open(NVS_NAMESPACE_WIFI, NVS_READONLY, &handle);
+    if (err != ESP_OK)
+    {
+      return false;
+    }
+
+    size_t ssidLength = 0;
+    size_t passwordLength = 0;
+
+    err = nvs_get_str(handle, NVS_KEY_WIFI_SSID, nullptr, &ssidLength);
+    if (err != ESP_OK || ssidLength == 0)
+    {
+      nvs_close(handle);
+      return false;
+    }
+
+    err = nvs_get_str(handle, NVS_KEY_WIFI_PASSWORD, nullptr, &passwordLength);
+    if (err != ESP_OK)
+    {
+      nvs_close(handle);
+      return false;
+    }
+
+    std::string ssidBuffer(ssidLength, '\0');
+    std::string passwordBuffer(passwordLength, '\0');
+
+    err = nvs_get_str(handle, NVS_KEY_WIFI_SSID, ssidBuffer.data(), &ssidLength);
+    if (err == ESP_OK)
+    {
+      err = nvs_get_str(handle, NVS_KEY_WIFI_PASSWORD, passwordBuffer.data(), &passwordLength);
+    }
+
+    nvs_close(handle);
+
+    if (err != ESP_OK)
+    {
+      return false;
+    }
+
+    ssid = String(ssidBuffer.c_str());
+    password = String(passwordBuffer.c_str());
+    return true;
+  }
+
+  bool saveWifiCredentials(const String &ssid, const String &password)
+  {
+    nvs_handle_t handle;
+    esp_err_t err = nvs_open(NVS_NAMESPACE_WIFI, NVS_READWRITE, &handle);
+    if (err != ESP_OK)
+    {
+      return false;
+    }
+
+    err = nvs_set_str(handle, NVS_KEY_WIFI_SSID, ssid.c_str());
+    if (err == ESP_OK)
+    {
+      err = nvs_set_str(handle, NVS_KEY_WIFI_PASSWORD, password.c_str());
+    }
+    if (err == ESP_OK)
+    {
+      err = nvs_commit(handle);
+    }
+
+    nvs_close(handle);
+    return err == ESP_OK;
+  }
+
   void appendJsonEscaped(String &dest, const String &value)
   {
     for (size_t i = 0; i < value.length(); ++i)
@@ -618,35 +691,6 @@ namespace
         break;
       }
     }
-  }
-
-  void dispatchWifiState(const String &state, const String &ssid, const String &message)
-  {
-    if (state.isEmpty())
-    {
-      return;
-    }
-
-    String payload = F("{\"event\":\"wifi_state\",\"state\":\"");
-    appendJsonEscaped(payload, state);
-    payload += F("\"");
-
-    if (!ssid.isEmpty())
-    {
-      payload += F(",\"ssid\":\"");
-      appendJsonEscaped(payload, ssid);
-      payload += F("\"");
-    }
-
-    if (!message.isEmpty())
-    {
-      payload += F(",\"message\":\"");
-      appendJsonEscaped(payload, message);
-      payload += F("\"");
-    }
-
-    payload += F("}");
-    dispatchTransportJson(payload);
   }
 
   bool lookupKeyCode(const String &token, uint8_t &code)
@@ -1497,6 +1541,25 @@ void setup()
     sendStatusError("Falling back to UART transport");
   }
 
+  wifi_manager::Callbacks callbacks;
+  callbacks.dispatch_transport_json = dispatchTransportJson;
+  callbacks.send_status_error = sendStatusError;
+  callbacks.send_event = sendEvent;
+  callbacks.load_credentials = loadWifiCredentials;
+  callbacks.save_credentials = saveWifiCredentials;
+  wifi_manager::init(callbacks);
+
+  bool staConnected = wifi_manager::connect_saved_credentials();
+
+  if (!staConnected)
+  {
+    wifi_manager::start_ap();
+    if (wifi_manager::is_configuration_mode())
+    {
+      sendEvent("wifi_config_mode");
+    }
+  }
+
   http_server::Dependencies httpDependencies;
   httpDependencies.command_queue = &transportCommandQueue;
   httpDependencies.event_queue = &transportEventQueue;
@@ -1515,24 +1578,6 @@ void setup()
   http_server::init(httpDependencies);
   http_server::start();
   startTransportPumpTask();
-  wifi_manager::Callbacks callbacks;
-  callbacks.dispatch_transport_json = dispatchTransportJson;
-  callbacks.send_status_error = sendStatusError;
-  callbacks.send_event = sendEvent;
-  wifi_manager::init(callbacks);
-
-  WiFi.onEvent(wifi_manager::on_event);
-
-  bool staConnected = wifi_manager::connect_saved_credentials();
-
-  if (!staConnected)
-  {
-    wifi_manager::start_ap();
-    if (wifi_manager::is_configuration_mode())
-    {
-      sendEvent("wifi_config_mode");
-    }
-  }
 
   sendEvent("ready");
 }
@@ -1550,3 +1595,4 @@ void loop()
   wifi_manager::process();
   delay(2);
 }
+
