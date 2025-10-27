@@ -1,8 +1,12 @@
 #include <Arduino.h>
 #include <BleCombo.h>
 #include <ArduinoJson.h>
+#include <WiFi.h>
+#include <nvs.h>
+#include <nvs_flash.h>
 #include <stdlib.h>
 #include <strings.h>
+#include <vector>
 
 namespace
 {
@@ -11,6 +15,13 @@ constexpr size_t INPUT_BUFFER_LIMIT = 512;
 constexpr size_t MAX_KEY_COMBO = 8;
 constexpr uint8_t MOUSE_ALL_BUTTONS = MOUSE_LEFT | MOUSE_RIGHT | MOUSE_MIDDLE | MOUSE_BACK | MOUSE_FORWARD;
 constexpr uint16_t DEFAULT_CHAR_DELAY_MS = 6;
+constexpr const char *NVS_NAMESPACE_WIFI = "wifi";
+constexpr const char *NVS_KEY_SSID = "ssid";
+constexpr const char *NVS_KEY_PASS = "password";
+constexpr unsigned long WIFI_CONNECT_TIMEOUT_MS = 20000;
+constexpr unsigned long WIFI_RETRY_DELAY_MS = 500;
+constexpr const char *CONFIG_AP_SSID = "uhid-setup";
+constexpr const char *CONFIG_AP_PASSWORD = "uhid1234";
 
 struct NamedCode
 {
@@ -158,6 +169,168 @@ constexpr size_t MAX_CONSUMER_KEYS = 8;
 
 String inputBuffer;
 bool lastBleConnectionState = false;
+bool configurationMode = false;
+
+bool initializeNvs()
+{
+  esp_err_t err = nvs_flash_init();
+  if (err == ESP_ERR_NVS_NO_FREE_PAGES || err == ESP_ERR_NVS_NEW_VERSION_FOUND)
+  {
+    if (nvs_flash_erase() != ESP_OK)
+    {
+      return false;
+    }
+    err = nvs_flash_init();
+  }
+  return err == ESP_OK;
+}
+
+bool loadWifiCredentials(String &ssid, String &password)
+{
+  nvs_handle_t handle;
+  esp_err_t err = nvs_open(NVS_NAMESPACE_WIFI, NVS_READONLY, &handle);
+  if (err != ESP_OK)
+  {
+    return false;
+  }
+
+  size_t ssidLength = 0;
+  err = nvs_get_str(handle, NVS_KEY_SSID, nullptr, &ssidLength);
+  if (err != ESP_OK || ssidLength <= 1)
+  {
+    nvs_close(handle);
+    return false;
+  }
+
+  std::vector<char> ssidBuffer(ssidLength);
+  err = nvs_get_str(handle, NVS_KEY_SSID, ssidBuffer.data(), &ssidLength);
+  if (err != ESP_OK)
+  {
+    nvs_close(handle);
+    return false;
+  }
+
+  size_t passwordLength = 0;
+  err = nvs_get_str(handle, NVS_KEY_PASS, nullptr, &passwordLength);
+  if (err == ESP_ERR_NVS_NOT_FOUND)
+  {
+    passwordLength = 1;
+  }
+  else if (err != ESP_OK)
+  {
+    nvs_close(handle);
+    return false;
+  }
+
+  std::vector<char> passwordBuffer(passwordLength);
+  if (passwordLength > 1)
+  {
+    err = nvs_get_str(handle, NVS_KEY_PASS, passwordBuffer.data(), &passwordLength);
+    if (err != ESP_OK)
+    {
+      nvs_close(handle);
+      return false;
+    }
+  }
+  else
+  {
+    passwordBuffer[0] = '\0';
+  }
+
+  nvs_close(handle);
+
+  ssid = String(ssidBuffer.data());
+  password = String(passwordBuffer.data());
+  return true;
+}
+
+bool saveWifiCredentials(const String &ssid, const String &password)
+{
+  nvs_handle_t handle;
+  esp_err_t err = nvs_open(NVS_NAMESPACE_WIFI, NVS_READWRITE, &handle);
+  if (err != ESP_OK)
+  {
+    return false;
+  }
+
+  err = nvs_set_str(handle, NVS_KEY_SSID, ssid.c_str());
+  if (err != ESP_OK)
+  {
+    nvs_close(handle);
+    return false;
+  }
+
+  err = nvs_set_str(handle, NVS_KEY_PASS, password.c_str());
+  if (err != ESP_OK)
+  {
+    nvs_close(handle);
+    return false;
+  }
+
+  err = nvs_commit(handle);
+  nvs_close(handle);
+  return err == ESP_OK;
+}
+
+void stopAccessPoint()
+{
+  wifi_mode_t mode = WiFi.getMode();
+  if (mode & WIFI_MODE_AP)
+  {
+    WiFi.softAPdisconnect(true);
+    if (mode == WIFI_MODE_AP)
+    {
+      WiFi.mode(WIFI_OFF);
+    }
+    else if (mode == WIFI_MODE_APSTA)
+    {
+      WiFi.mode(WIFI_MODE_STA);
+    }
+    configurationMode = false;
+  }
+}
+
+void startAccessPoint()
+{
+  WiFi.mode(WIFI_MODE_APSTA);
+  IPAddress localIp(192, 168, 4, 1);
+  IPAddress gateway(192, 168, 4, 1);
+  IPAddress subnet(255, 255, 255, 0);
+  WiFi.softAPConfig(localIp, gateway, subnet);
+  WiFi.softAP(CONFIG_AP_SSID, CONFIG_AP_PASSWORD);
+  configurationMode = true;
+}
+
+bool connectToStation(const String &ssid, const String &password)
+{
+  if (ssid.isEmpty())
+  {
+    return false;
+  }
+
+  WiFi.mode(WIFI_MODE_STA);
+  WiFi.persistent(false);
+  WiFi.setAutoReconnect(true);
+  WiFi.begin(ssid.c_str(), password.c_str());
+
+  unsigned long startAttempt = millis();
+  while ((millis() - startAttempt) < WIFI_CONNECT_TIMEOUT_MS)
+  {
+    wl_status_t status = WiFi.status();
+    if (status == WL_CONNECTED)
+    {
+      return true;
+    }
+    if (status == WL_CONNECT_FAILED || status == WL_CONNECTION_LOST || status == WL_DISCONNECTED)
+    {
+      WiFi.reconnect();
+    }
+    delay(WIFI_RETRY_DELAY_MS);
+  }
+
+  WiFi.disconnect();
+  return false;
+}
 
 void sendStatusOk()
 {
@@ -185,6 +358,23 @@ void sendEvent(const char *name, const char *detail = nullptr)
   {
     Serial.println(F("\"}"));
   }
+}
+
+bool connectStationAndPersist(const String &ssid, const String &password)
+{
+  if (!connectToStation(ssid, password))
+  {
+    return false;
+  }
+
+  if (!saveWifiCredentials(ssid, password))
+  {
+    sendStatusError("Failed to save WiFi credentials");
+  }
+  stopAccessPoint();
+  configurationMode = false;
+  sendEvent("wifi_sta_connected", ssid.c_str());
+  return true;
 }
 
 bool lookupKeyCode(const String &token, uint8_t &code)
@@ -1020,6 +1210,32 @@ void setup()
   inputBuffer.reserve(INPUT_BUFFER_LIMIT);
   Keyboard.begin();
   Mouse.begin();
+
+  if (!initializeNvs())
+  {
+    sendStatusError("Failed to initialize NVS");
+  }
+
+  String savedSsid;
+  String savedPassword;
+  bool staConnected = false;
+  if (loadWifiCredentials(savedSsid, savedPassword))
+  {
+    if (connectStationAndPersist(savedSsid, savedPassword))
+    {
+      staConnected = true;
+    }
+  }
+
+  if (!staConnected)
+  {
+    startAccessPoint();
+    if (configurationMode)
+    {
+      sendEvent("wifi_config_mode");
+    }
+  }
+
   sendEvent("ready");
 }
 
