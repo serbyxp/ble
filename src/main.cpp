@@ -859,10 +859,11 @@ namespace
     if (err != ESP_OK)
     {
       restoreApModeAfterTemporarySta();
-      JsonDocument response(160);
-      response["status"] = "error";
-      response["message"] = "Scan failed";
-      response["code"] = static_cast<int>(err);
+      JsonDocument response;
+      auto obj = response.to<JsonObject>();
+      obj["status"] = "error";
+      obj["message"] = "Scan failed";
+      obj["code"] = static_cast<int>(err);
       return sendJsonResponse(req, 500, response);
     }
 
@@ -871,10 +872,11 @@ namespace
     if (countErr != ESP_OK)
     {
       restoreApModeAfterTemporarySta();
-      JsonDocument response(160);
-      response["status"] = "error";
-      response["message"] = "Unable to read scan results";
-      response["code"] = static_cast<int>(countErr);
+      JsonDocument response;
+      auto obj = response.to<JsonObject>();
+      obj["status"] = "error";
+      obj["message"] = "Unable to read scan results";
+      obj["code"] = static_cast<int>(countErr);
       return sendJsonResponse(req, 500, response);
     }
     std::vector<wifi_ap_record_t> records(apCount);
@@ -889,8 +891,9 @@ namespace
 
     const size_t maxNetworks = 20;
     const size_t visibleNetworks = std::min(records.size(), maxNetworks);
-    JsonDocument doc(256 + visibleNetworks * 96);
-    JsonArray networks = doc["networks"].to<JsonArray>();
+    JsonDocument doc;
+    auto obj = doc.to<JsonObject>();
+    JsonArray networks = obj["networks"].to<JsonArray>();
     size_t added = 0;
     for (const auto &record : records)
     {
@@ -908,7 +911,7 @@ namespace
     }
 
     restoreApModeAfterTemporarySta();
-    doc["status"] = "ok";
+    obj["status"] = "ok";
     return sendJsonResponse(req, 200, doc);
   }
 
@@ -916,17 +919,19 @@ namespace
   {
     if (req->method != HTTP_POST)
     {
-      JsonDocument response(128);
-      response["status"] = "error";
-      response["message"] = "Method not allowed";
+      JsonDocument response;
+      auto obj = response.to<JsonObject>();
+      obj["status"] = "error";
+      obj["message"] = "Method not allowed";
       return sendJsonResponse(req, 405, response);
     }
 
     if (req->content_len == 0)
     {
-      JsonDocument response(128);
-      response["status"] = "error";
-      response["message"] = "Missing request body";
+      JsonDocument response;
+      auto obj = response.to<JsonObject>();
+      obj["status"] = "error";
+      obj["message"] = "Missing request body";
       return sendJsonResponse(req, 400, response);
     }
 
@@ -941,9 +946,10 @@ namespace
         int ret = httpd_req_recv(req, buffer + received, body.size() - received);
         if (ret <= 0)
         {
-          JsonDocument response(128);
-          response["status"] = "error";
-          response["message"] = "Failed to read body";
+          JsonDocument response;
+          auto obj = response.to<JsonObject>();
+          obj["status"] = "error";
+          obj["message"] = "Failed to read body";
           return sendJsonResponse(req, 400, response);
         }
         received += static_cast<size_t>(ret);
@@ -951,13 +957,14 @@ namespace
     }
     body.push_back('\0');
 
-    JsonDocument payload(256);
+    JsonDocument payload;
     DeserializationError error = deserializeJson(payload, body.c_str());
     if (error)
     {
-      JsonDocument response(128);
-      response["status"] = "error";
-      response["message"] = "Invalid JSON";
+      JsonDocument response;
+      auto obj = response.to<JsonObject>();
+      obj["status"] = "error";
+      obj["message"] = "Invalid JSON";
       return sendJsonResponse(req, 400, response);
     }
 
@@ -967,9 +974,10 @@ namespace
 
     if (ssid.isEmpty())
     {
-      JsonDocument response(128);
-      response["status"] = "error";
-      response["message"] = "SSID is required";
+      JsonDocument response;
+      auto obj = response.to<JsonObject>();
+      obj["status"] = "error";
+      obj["message"] = "SSID is required";
       return sendJsonResponse(req, 400, response);
     }
 
@@ -980,33 +988,34 @@ namespace
 
     bool connected = connectStationAndPersist(ssid, password, true);
 
-    JsonDocument response(192);
-    appendWifiStateJson(response);
+    JsonDocument response;
+    auto obj = response.to<JsonObject>();
+    appendWifiStateJson(obj);
     if (connected)
     {
-      response["status"] = "ok";
-      if (response["ssid"].isNull())
+      obj["status"] = "ok";
+      if (obj["ssid"].isNull())
       {
-        response["ssid"] = ssid;
+        obj["ssid"] = ssid;
       }
-      const char *messageValue = response["message"].is<const char *>() ? response["message"].as<const char *>() : nullptr;
+      const char *messageValue = obj["message"].is<const char *>() ? obj["message"].as<const char *>() : nullptr;
       if (!messageValue || messageValue[0] == '\0')
       {
-        response["message"] = "Connected";
+        obj["message"] = "Connected";
       }
       return sendJsonResponse(req, 200, response);
     }
     else
     {
-      response["status"] = "error";
-      if (response["ssid"].isNull())
+      obj["status"] = "error";
+      if (obj["ssid"].isNull())
       {
-        response["ssid"] = ssid;
+        obj["ssid"] = ssid;
       }
-      const char *messageValue = response["message"].is<const char *>() ? response["message"].as<const char *>() : nullptr;
+      const char *messageValue = obj["message"].is<const char *>() ? obj["message"].as<const char *>() : nullptr;
       if (!messageValue || messageValue[0] == '\0')
       {
-        response["message"] = "Failed to connect";
+        obj["message"] = "Failed to connect";
       }
       sendJsonResponse(req, 500, response);
       if (!configurationMode)
@@ -1019,18 +1028,20 @@ namespace
 
   esp_err_t handleWifiStateGet(httpd_req_t *req)
   {
-    JsonDocument doc(192);
-    doc["status"] = "ok";
-    appendWifiStateJson(doc);
+    JsonDocument doc;
+    auto obj = doc.to<JsonObject>();
+    obj["status"] = "ok";
+    appendWifiStateJson(obj);
     return sendJsonResponse(req, 200, doc);
   }
 
   esp_err_t handleTransportGet(httpd_req_t *req)
   {
-    JsonDocument doc(160);
-    doc["status"] = "ok";
-    doc["mode"] = transportModeToString(activeTransportMode.load());
-    doc["baud"] = uartBaudRate;
+    JsonDocument doc;
+    auto obj = doc.to<JsonObject>();
+    obj["status"] = "ok";
+    obj["mode"] = transportModeToString(activeTransportMode.load());
+    obj["baud"] = uartBaudRate;
     return sendJsonResponse(req, 200, doc);
   }
 
@@ -1038,17 +1049,19 @@ namespace
   {
     if (req->method != HTTP_POST)
     {
-      JsonDocument response(128);
-      response["status"] = "error";
-      response["message"] = "Method not allowed";
+      JsonDocument response;
+      auto obj = response.to<JsonObject>();
+      obj["status"] = "error";
+      obj["message"] = "Method not allowed";
       return sendJsonResponse(req, 405, response);
     }
 
     if (req->content_len == 0)
     {
-      JsonDocument response(128);
-      response["status"] = "error";
-      response["message"] = "Missing request body";
+      JsonDocument response;
+      auto obj = response.to<JsonObject>();
+      obj["status"] = "error";
+      obj["message"] = "Missing request body";
       return sendJsonResponse(req, 400, response);
     }
 
@@ -1063,9 +1076,10 @@ namespace
         int ret = httpd_req_recv(req, buffer + received, body.size() - received);
         if (ret <= 0)
         {
-          JsonDocument response(128);
-          response["status"] = "error";
-          response["message"] = "Failed to read body";
+          JsonDocument response;
+          auto obj = response.to<JsonObject>();
+          obj["status"] = "error";
+          obj["message"] = "Failed to read body";
           return sendJsonResponse(req, 400, response);
         }
         received += static_cast<size_t>(ret);
@@ -1073,13 +1087,14 @@ namespace
     }
     body.push_back('\0');
 
-    JsonDocument payload(160);
+    JsonDocument payload;
     DeserializationError error = deserializeJson(payload, body.c_str());
     if (error)
     {
-      JsonDocument response(128);
-      response["status"] = "error";
-      response["message"] = "Invalid JSON";
+      JsonDocument response;
+      auto obj = response.to<JsonObject>();
+      obj["status"] = "error";
+      obj["message"] = "Invalid JSON";
       return sendJsonResponse(req, 400, response);
     }
 
@@ -1092,9 +1107,10 @@ namespace
       int baudCandidate = payload["baud"].as<int>();
       if (baudCandidate < 9600 || baudCandidate > 921600)
       {
-        JsonDocument response(160);
-        response["status"] = "error";
-        response["message"] = "Invalid baud rate";
+        JsonDocument response;
+        auto obj = response.to<JsonObject>();
+        obj["status"] = "error";
+        obj["message"] = "Invalid baud rate";
         return sendJsonResponse(req, 400, response);
       }
       requestedBaud = static_cast<uint32_t>(baudCandidate);
@@ -1107,24 +1123,27 @@ namespace
 
     if (!applyTransportMode(requestedMode))
     {
-      JsonDocument response(160);
-      response["status"] = "error";
-      response["message"] = "Failed to apply transport mode";
+      JsonDocument response;
+      auto obj = response.to<JsonObject>();
+      obj["status"] = "error";
+      obj["message"] = "Failed to apply transport mode";
       return sendJsonResponse(req, 500, response);
     }
 
     if (!saveTransportConfig(activeTransportMode.load(), uartBaudRate))
     {
-      JsonDocument response(160);
-      response["status"] = "error";
-      response["message"] = "Failed to persist transport";
+      JsonDocument response;
+      auto obj = response.to<JsonObject>();
+      obj["status"] = "error";
+      obj["message"] = "Failed to persist transport";
       return sendJsonResponse(req, 500, response);
     }
 
-    JsonDocument response(160);
-    response["status"] = "ok";
-    response["mode"] = transportModeToString(activeTransportMode.load());
-    response["baud"] = uartBaudRate;
+    JsonDocument response;
+    auto obj = response.to<JsonObject>();
+    obj["status"] = "ok";
+    obj["mode"] = transportModeToString(activeTransportMode.load());
+    obj["baud"] = uartBaudRate;
     return sendJsonResponse(req, 200, response);
   }
 
