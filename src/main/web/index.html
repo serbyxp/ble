@@ -257,6 +257,41 @@
       flex: 1 1 220px;
     }
 
+    .column {
+      display: flex;
+      flex-direction: column;
+      gap: 0.75rem;
+    }
+
+    .transport-options {
+      display: flex;
+      flex-direction: column;
+      gap: 0.75rem;
+    }
+
+    .transport-option {
+      display: flex;
+      align-items: center;
+      gap: 0.6rem;
+      font-weight: 600;
+    }
+
+    .transport-option input[type="radio"] {
+      width: 18px;
+      height: 18px;
+    }
+
+    .transport-details {
+      display: none;
+      flex-direction: column;
+      gap: 0.5rem;
+      margin-left: 1.9rem;
+    }
+
+    .transport-details.active {
+      display: flex;
+    }
+
     .status {
       font-size: 0.9rem;
       opacity: 0.82;
@@ -382,20 +417,38 @@
     </fieldset>
   </section>
 
-  <section>
-    <form id="connection-form" class="row">
-      <label>Serial Port <input type="text" id="port-input" placeholder="COM3 or /dev/ttyUSB0" /></label>
-      <label>
-        Baud
-        <select id="baud-input">
-          <option value="115200" selected>115200</option>
-          <option value="230400">230400</option>
-          <option value="460800">460800</option>
-        </select>
-      </label>
-      <button type="submit">Connect</button>
+  <section id="transport-section">
+    <form id="transport-form" class="column">
+      <fieldset>
+        <legend>Command Transport</legend>
+        <div class="transport-options">
+          <label class="transport-option">
+            <input type="radio" name="transport-mode" value="uart" checked />
+            UART Serial
+          </label>
+          <div id="uart-details" class="transport-details active">
+            <label>
+              Baud
+              <select id="uart-baud">
+                <option value="115200" selected>115200</option>
+                <option value="230400">230400</option>
+                <option value="460800">460800</option>
+              </select>
+            </label>
+            <small>Commands are received over the USB serial connection.</small>
+          </div>
+          <label class="transport-option">
+            <input type="radio" name="transport-mode" value="websocket" />
+            WebSocket
+          </label>
+          <div id="websocket-details" class="transport-details">
+            <small>Commands stream over Wi-Fi via the /ws WebSocket endpoint.</small>
+          </div>
+        </div>
+        <button type="submit" id="transport-save">Save</button>
+      </fieldset>
     </form>
-    <div class="status" id="connection-status">Not connected. Configure the serial port then click Connect.</div>
+    <div class="status" id="transport-status">Loading transport settings…</div>
   </section>
 
   <section>
@@ -510,10 +563,6 @@
 
   <script>
     (() => {
-      const connectionForm = document.getElementById("connection-form");
-      const portInput = document.getElementById("port-input");
-      const baudInput = document.getElementById("baud-input");
-      const connectionStatus = document.getElementById("connection-status");
       const videoUrlInput = document.getElementById("video-url-input");
       const videoLoadButton = document.getElementById("video-load-button");
       const remoteVideo = document.getElementById("remote-video");
@@ -545,6 +594,13 @@
       const wifiPassword = document.getElementById("wifi-password");
       const wifiRefreshButton = document.getElementById("wifi-refresh");
       const wifiConnectButton = document.getElementById("wifi-connect");
+      const transportForm = document.getElementById("transport-form");
+      const transportStatus = document.getElementById("transport-status");
+      const transportSaveButton = document.getElementById("transport-save");
+      const transportModeInputs = Array.from(document.querySelectorAll("input[name='transport-mode']"));
+      const uartDetails = document.getElementById("uart-details");
+      const websocketDetails = document.getElementById("websocket-details");
+      const uartBaud = document.getElementById("uart-baud");
 
       let websocket = null;
       let wsRequestId = 0;
@@ -552,8 +608,61 @@
       let pointerLockEnabled = false;
       let orientationMode = "auto";
       let videoPlaying = false;
+      let transportMode = "uart";
 
       const mouseButtonMap = ["left", "middle", "right", "back", "forward"];
+
+      function updateTransportDetails(mode) {
+        if (uartDetails) {
+          uartDetails.classList.toggle("active", mode === "uart");
+        }
+        if (websocketDetails) {
+          websocketDetails.classList.toggle("active", mode === "websocket");
+        }
+      }
+
+      function setTransportRadios(mode) {
+        transportModeInputs.forEach((input) => {
+          input.checked = input.value === mode;
+        });
+      }
+
+      function setTransportStatus(text, isError = false) {
+        if (!transportStatus) return;
+        transportStatus.textContent = text;
+        transportStatus.classList.toggle("error", Boolean(isError));
+      }
+
+      function formatTransportStatus(mode, baud) {
+        if (mode === "websocket") {
+          return "Active transport: WebSocket";
+        }
+        const baudLabel = baud || (uartBaud ? uartBaud.value : "115200");
+        return `Active transport: UART @ ${baudLabel} baud`;
+      }
+
+      function applyActiveTransport(mode, baud) {
+        transportMode = mode;
+        setTransportRadios(mode);
+        if (typeof baud === "number" && uartBaud) {
+          uartBaud.value = String(baud);
+        }
+        updateTransportDetails(mode);
+        setTransportStatus(formatTransportStatus(mode, typeof baud === "number" ? String(baud) : null));
+        if (mode === "websocket") {
+          ensureWebsocket();
+        } else {
+          closeWebsocket();
+        }
+        updateOverlayState();
+      }
+
+      transportModeInputs.forEach((input) => {
+        input.addEventListener("change", () => {
+          const mode = input.value === "websocket" ? "websocket" : "uart";
+          updateTransportDetails(mode);
+        });
+      });
 
       function setWifiStatus(message, isError = false) {
         if (!wifiStatus) return;
@@ -735,11 +844,6 @@
       function logInfo(message) { appendLog("i", message, "info"); }
       function logError(message) { appendLog("!", message, "error"); }
 
-      function setStatus(text, isError = false) {
-        connectionStatus.textContent = text;
-        connectionStatus.classList.toggle("error", isError);
-      }
-
       async function apiGet(path) {
         const response = await fetch(path, { headers: { Accept: "application/json" } });
         if (!response.ok) {
@@ -816,12 +920,27 @@
         }
       }
 
+      function closeWebsocket() {
+        if (!websocket) return;
+        try {
+          websocket.close();
+        } catch (err) {
+          console.warn("Failed to close WebSocket", err);
+        }
+        websocket = null;
+      }
+
       function ensureWebsocket() {
+        if (transportMode !== "websocket") {
+          closeWebsocket();
+          updateOverlayState();
+          return;
+        }
         if (websocket && (websocket.readyState === WebSocket.OPEN || websocket.readyState === WebSocket.CONNECTING)) {
           return;
         }
         const scheme = window.location.protocol === "https:" ? "wss" : "ws";
-        websocket = new WebSocket(`${scheme}://${window.location.host}/ws/hid`);
+        websocket = new WebSocket(`${scheme}://${window.location.host}/ws`);
 
         websocket.addEventListener("open", () => {
           logInfo("WebSocket connected");
@@ -833,6 +952,10 @@
             const data = JSON.parse(event.data);
             if (data.status === "error") {
               logError(JSON.stringify(data, null, 2));
+            } else if (data.event === "transport_mode") {
+              const detail = typeof data.detail === "string" ? data.detail : "";
+              logInfo(`Transport event: ${detail}`);
+              loadTransportConfig();
             } else if (data.type !== "ping") {
               logRecv(JSON.stringify(data, null, 2));
             }
@@ -843,8 +966,11 @@
 
         websocket.addEventListener("close", () => {
           logInfo("WebSocket disconnected");
+          websocket = null;
           updateOverlayState();
-          setTimeout(ensureWebsocket, 1500);
+          if (transportMode === "websocket") {
+            setTimeout(ensureWebsocket, 1500);
+          }
         });
 
         websocket.addEventListener("error", (event) => {
@@ -864,12 +990,14 @@
       }
 
       function shouldForwardInput() {
-        return captureEnabled && websocket && websocket.readyState === WebSocket.OPEN;
+        return transportMode === "websocket" && captureEnabled && websocket && websocket.readyState === WebSocket.OPEN;
       }
 
       function updateOverlayHint() {
         if (!captureEnabled) {
           overlayHint.textContent = "Capture off – click Start Capture";
+        } else if (transportMode !== "websocket") {
+          overlayHint.textContent = "WebSocket transport disabled";
         } else if (!websocket || websocket.readyState !== WebSocket.OPEN) {
           overlayHint.textContent = "WebSocket not connected";
         } else if (pointerLockEnabled && document.pointerLockElement === overlay) {
@@ -882,7 +1010,7 @@
       }
 
       function updateOverlayState() {
-        const canCapture = websocket && websocket.readyState === WebSocket.OPEN;
+        const canCapture = transportMode === "websocket" && websocket && websocket.readyState === WebSocket.OPEN;
         overlay.classList.toggle("disabled", !canCapture);
         overlay.classList.toggle("inactive", !captureEnabled);
         overlay.classList.toggle("active", captureEnabled);
@@ -906,23 +1034,40 @@
         return mouseButtonMap[event.button] || "left";
       }
 
-      connectionForm.addEventListener("submit", async (event) => {
-        event.preventDefault();
-        const payload = {
-          port: portInput.value.trim(),
-          baud: Number.parseInt(baudInput.value, 10) || 115200,
-        };
-        logSend(`POST /api/config\n${JSON.stringify(payload, null, 2)}`);
-        try {
-          const data = await apiPost("/api/config", payload);
-          setStatus(`Connected to ${data.port} @ ${data.baud} baud`);
-          logRecv(JSON.stringify(data, null, 2));
-        } catch (err) {
-          const message = err instanceof Error ? err.message : String(err);
-          setStatus(message, true);
-          logError(message);
-        }
-      });
+      if (transportForm) {
+        transportForm.addEventListener("submit", async (event) => {
+          event.preventDefault();
+          if (transportSaveButton) {
+            transportSaveButton.disabled = true;
+          }
+          const formData = new FormData(transportForm);
+          const selected = formData.get("transport-mode") === "websocket" ? "websocket" : "uart";
+          const payload = { mode: selected };
+          if (selected === "uart" && uartBaud) {
+            payload.baud = Number.parseInt(uartBaud.value, 10) || 115200;
+          }
+          setTransportStatus("Saving…");
+          logSend(`POST /api/transport\n${JSON.stringify(payload, null, 2)}`);
+          try {
+            const data = await apiPost("/api/transport", payload);
+            const mode = data.mode === "websocket" ? "websocket" : "uart";
+            applyActiveTransport(mode, typeof data.baud === "number" ? data.baud : undefined);
+            const summary = mode === "websocket" ? "WebSocket" : `UART @ ${data.baud} baud`;
+            logInfo(`Transport updated: ${summary}`);
+            logRecv(JSON.stringify(data, null, 2));
+          } catch (err) {
+            const message = err instanceof Error ? err.message : String(err);
+            setTransportStatus(`Failed to save: ${message}`, true);
+            logError(message);
+            setTransportRadios(transportMode);
+            updateTransportDetails(transportMode);
+          } finally {
+            if (transportSaveButton) {
+              transportSaveButton.disabled = false;
+            }
+          }
+        });
+      }
 
       videoLoadButton.addEventListener("click", () => {
         const url = videoUrlInput.value.trim();
@@ -1211,20 +1356,30 @@
         }
       });
 
-      async function initialise() {
-        ensureWebsocket();
+      async function loadTransportConfig() {
+        setTransportStatus("Loading transport settings…");
         try {
-          const config = await apiGet("/api/config");
-          portInput.value = config.port ?? "";
-          baudInput.value = String(config.baud ?? "115200");
-          setStatus(`Connected to ${config.port} @ ${config.baud} baud`);
-          logInfo(`Initial configuration: ${JSON.stringify(config)}`);
+          logSend("GET /api/transport");
+          const data = await apiGet("/api/transport");
+          logRecv(JSON.stringify(data, null, 2));
+          const mode = data.mode === "websocket" ? "websocket" : "uart";
+          applyActiveTransport(mode, typeof data.baud === "number" ? data.baud : undefined);
+          const summary = mode === "websocket" ? "WebSocket" : `UART @ ${data.baud} baud`;
+          logInfo(`Active transport: ${summary}`);
         } catch (err) {
           const message = err instanceof Error ? err.message : String(err);
-          setStatus(`Unable to query config: ${message}`, true);
+          setTransportStatus(`Unable to load transport: ${message}`, true);
           logError(message);
+          transportMode = "uart";
+          closeWebsocket();
+          updateTransportDetails("uart");
+          setTransportRadios("uart");
         }
         updateOverlayState();
+      }
+
+      async function initialise() {
+        await loadTransportConfig();
       }
 
       initialise();
