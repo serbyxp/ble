@@ -717,21 +717,89 @@ namespace
     return mode == WIFI_MODE_AP || mode == WIFI_MODE_APSTA;
   }
 
+  bool ensureWifiStarted();
+
   void setWifiModeTracked(wifi_mode_t mode)
   {
     if (wifiCurrentMode == mode)
     {
       return;
     }
+
+    bool success = false;
     if (wifiCurrentMode == WIFI_MODE_NULL)
     {
-      WiFi.mode(mode);
+      success = WiFi.mode(mode);
     }
     else
     {
-      esp_wifi_set_mode(mode);
+      esp_err_t err = esp_wifi_set_mode(mode);
+      if (err == ESP_OK)
+      {
+        success = true;
+      }
+      else
+      {
+        success = WiFi.mode(mode);
+      }
     }
-    wifiCurrentMode = mode;
+
+    if (!success)
+    {
+      wifi_mode_t actual = WIFI_MODE_NULL;
+      if (esp_wifi_get_mode(&actual) == ESP_OK)
+      {
+        wifiCurrentMode = actual;
+      }
+      else
+      {
+        wifiCurrentMode = WIFI_MODE_NULL;
+      }
+      return;
+    }
+
+    wifi_mode_t actual = WIFI_MODE_NULL;
+    if (esp_wifi_get_mode(&actual) == ESP_OK)
+    {
+      wifiCurrentMode = actual;
+    }
+    else
+    {
+      wifiCurrentMode = mode;
+    }
+  }
+
+  bool ensureWifiStarted()
+  {
+    wifi_mode_t currentMode = WIFI_MODE_NULL;
+    if (esp_wifi_get_mode(&currentMode) == ESP_OK)
+    {
+      wifiCurrentMode = currentMode;
+    }
+
+    if (wifiCurrentMode == WIFI_MODE_NULL)
+    {
+      return false;
+    }
+
+    esp_err_t err = esp_wifi_start();
+    if (err == ESP_OK || err == ESP_ERR_WIFI_STATE)
+    {
+      return true;
+    }
+
+    if (err == ESP_ERR_WIFI_NOT_INIT)
+    {
+      if (!WiFi.mode(wifiCurrentMode))
+      {
+        wifiCurrentMode = WIFI_MODE_NULL;
+        return false;
+      }
+      err = esp_wifi_start();
+      return err == ESP_OK || err == ESP_ERR_WIFI_STATE;
+    }
+
+    return false;
   }
 
   void ensureApOnlyMode()
@@ -850,6 +918,16 @@ namespace
   esp_err_t handleScan(httpd_req_t *req)
   {
     requestApStaMode(true);
+
+    if (!ensureWifiStarted())
+    {
+      restoreApModeAfterTemporarySta();
+      JsonDocument response;
+      auto obj = response.to<JsonObject>();
+      obj["status"] = "error";
+      obj["message"] = "WiFi interface not ready";
+      return sendJsonResponse(req, 503, response);
+    }
 
     int16_t networkCount = WiFi.scanNetworks(/*async=*/false, /*show_hidden=*/false, /*passive=*/false);
     if (networkCount < 0)
@@ -1520,6 +1598,19 @@ namespace
     }
     WiFi.persistent(false);
     WiFi.setAutoReconnect(true);
+
+    if (!ensureWifiStarted())
+    {
+      if (keepApActive)
+      {
+        startAccessPoint();
+      }
+      else
+      {
+        WiFi.disconnect();
+      }
+      return false;
+    }
     WiFi.begin(ssid.c_str(), password.c_str());
 
     staConnectInProgress = true;
