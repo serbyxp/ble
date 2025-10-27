@@ -552,6 +552,9 @@
       let pointerLockEnabled = false;
       let orientationMode = "auto";
       let videoPlaying = false;
+      let wifiScanInProgress = false;
+      let wifiConnectInProgress = false;
+      let wifiStateData = { state: "", ssid: "", message: "" };
 
       const mouseButtonMap = ["left", "middle", "right", "back", "forward"];
 
@@ -559,6 +562,61 @@
         if (!wifiStatus) return;
         wifiStatus.textContent = message;
         wifiStatus.classList.toggle("error", Boolean(isError));
+      }
+
+      function updateWifiControls() {
+        if (wifiRefreshButton) {
+          wifiRefreshButton.disabled = wifiScanInProgress || wifiConnectInProgress;
+        }
+        if (wifiConnectButton) {
+          wifiConnectButton.disabled = wifiConnectInProgress;
+        }
+      }
+
+      function applyWifiState() {
+        const { state, ssid, message } = wifiStateData;
+        if (state === "connecting") {
+          wifiConnectInProgress = true;
+          const label = ssid ? `Connecting to ${ssid}…` : "Connecting…";
+          setWifiStatus(label);
+        } else if (state === "connected") {
+          wifiConnectInProgress = false;
+          if (message) {
+            setWifiStatus(message);
+          } else {
+            const label = ssid ? `Connected to ${ssid}.` : "Connected to Wi-Fi.";
+            setWifiStatus(label);
+          }
+        } else if (state === "failed") {
+          wifiConnectInProgress = false;
+          const errorText = message || (ssid ? `Failed to connect to ${ssid}.` : "Failed to connect.");
+          setWifiStatus(errorText, true);
+        } else {
+          wifiConnectInProgress = false;
+        }
+        updateWifiControls();
+      }
+
+      function updateWifiStateFromPayload(payload) {
+        if (!payload || typeof payload !== "object") return false;
+        const state = typeof payload.state === "string" ? payload.state : "";
+        if (!state) return false;
+        const ssid = typeof payload.ssid === "string" ? payload.ssid : wifiStateData.ssid;
+        const message = typeof payload.message === "string" ? payload.message : "";
+        wifiStateData = { state, ssid, message };
+        applyWifiState();
+        return true;
+      }
+
+      function handleEventMessage(data) {
+        if (!data || typeof data !== "object") return false;
+        const eventName = typeof data.event === "string" ? data.event : "";
+        if (!eventName) return false;
+        if (eventName === "wifi_state") {
+          updateWifiStateFromPayload(data);
+          return true;
+        }
+        return false;
       }
 
       function renderWifiNetworks(networks) {
@@ -606,9 +664,23 @@
         });
       }
 
+      async function loadWifiState() {
+        try {
+          const response = await fetch("/api/wifi/state", { headers: { Accept: "application/json" } });
+          if (!response.ok) {
+            return;
+          }
+          const data = await response.json().catch(() => ({}));
+          updateWifiStateFromPayload(data);
+        } catch (error) {
+          console.warn("Failed to load Wi-Fi state", error);
+        }
+      }
+
       async function loadWifiNetworks() {
         if (!wifiRefreshButton) return;
-        wifiRefreshButton.disabled = true;
+        wifiScanInProgress = true;
+        updateWifiControls();
         setWifiStatus("Scanning for networks…");
         try {
           const response = await fetch("/scan", { headers: { Accept: "application/json" } });
@@ -635,17 +707,16 @@
             wifiNetworkList.appendChild(empty);
           }
         } finally {
-          wifiRefreshButton.disabled = false;
+          wifiScanInProgress = false;
+          updateWifiControls();
         }
       }
 
       async function configureWifi(ssid, password) {
         if (!wifiConnectButton || !ssid) return;
-        wifiConnectButton.disabled = true;
-        if (wifiRefreshButton) {
-          wifiRefreshButton.disabled = true;
-        }
-        setWifiStatus(`Connecting to ${ssid}…`);
+        wifiStateData = { state: "connecting", ssid, message: "" };
+        applyWifiState();
+        let hasWifiState = false;
         try {
           const response = await fetch("/configure", {
             method: "POST",
@@ -653,18 +724,29 @@
             body: JSON.stringify({ ssid, password })
           });
           const data = await response.json().catch(() => ({}));
+          hasWifiState = updateWifiStateFromPayload(data);
           if (!response.ok || (data && data.status === "error")) {
             const message = data && data.message ? data.message : `${response.status} ${response.statusText}`;
             throw new Error(message);
           }
-          setWifiStatus(`Connected to ${ssid}. The ESP32 will attempt to join the network.`);
+          if (!hasWifiState) {
+            wifiStateData = {
+              state: "connected",
+              ssid,
+              message: `Connected to ${ssid}. The ESP32 will attempt to join the network.`
+            };
+            applyWifiState();
+          }
         } catch (error) {
           console.error(error);
-          setWifiStatus(`Connection failed: ${error instanceof Error ? error.message : String(error)}`, true);
-        } finally {
-          wifiConnectButton.disabled = false;
-          if (wifiRefreshButton) {
-            wifiRefreshButton.disabled = false;
+          if (!hasWifiState) {
+            const reason = error instanceof Error ? error.message : String(error);
+            wifiStateData = {
+              state: "failed",
+              ssid,
+              message: `Connection failed: ${reason}`
+            };
+            applyWifiState();
           }
         }
       }
@@ -672,6 +754,7 @@
       const formatTime = () => new Date().toLocaleTimeString();
 
       if (wifiSection) {
+        updateWifiControls();
         if (wifiRefreshButton) {
           wifiRefreshButton.addEventListener("click", () => {
             loadWifiNetworks();
@@ -708,6 +791,7 @@
           });
         }
 
+        loadWifiState();
         loadWifiNetworks();
       }
 
@@ -831,6 +915,7 @@
         websocket.addEventListener("message", (event) => {
           try {
             const data = JSON.parse(event.data);
+            handleEventMessage(data);
             if (data.status === "error") {
               logError(JSON.stringify(data, null, 2));
             } else if (data.type !== "ping") {
