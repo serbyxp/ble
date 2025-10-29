@@ -183,6 +183,7 @@ namespace
       {
         g_lastConnectionAttempt = millis() - WIFI_AP_START_DELAY_MS;
       }
+      return false;
     }
 
     return true;
@@ -243,7 +244,8 @@ namespace
     {
       if (config.hasWifiCredentials && !config.wifi.ssid.isEmpty())
       {
-        if (!connectToConfiguredNetwork())
+        bool connected = connectToConfiguredNetwork();
+        if (!connected)
         {
           startAccessPoint();
         }
@@ -601,7 +603,8 @@ void websocketTransportBegin(QueueHandle_t queue)
   g_queue = queue;
 
   WiFi.persistent(false);
-  if (!connectToConfiguredNetwork())
+  bool connected = connectToConfiguredNetwork();
+  if (!connected)
   {
     startAccessPoint();
   }
