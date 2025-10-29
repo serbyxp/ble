@@ -6,6 +6,7 @@
 #include "ble_command_processor.h"
 #include "command_message.h"
 #include "device_config.h"
+#include "transport_uart.h"
 #include "transport_websocket.h"
 
 namespace
@@ -14,93 +15,28 @@ namespace
 
   QueueHandle_t g_commandQueue = nullptr;
   BleCommandProcessor g_processor;
-  DeviceConfig &g_config = getMutableDeviceConfig();
-
-  void sendInputTooLong()
-  {
-    Serial.println(F("{\"status\":\"error\",\"message\":\"Input too long\"}"));
-  }
-
-  void sendQueueFull()
-  {
-    Serial.println(F("{\"status\":\"error\",\"message\":\"Command queue full\"}"));
-  }
 
   void transportTask(void *)
   {
-    String buffer;
-    buffer.reserve(COMMAND_MESSAGE_MAX_LENGTH);
-
     websocketTransportBegin(g_commandQueue);
+    uartTransportBegin(g_commandQueue);
 
-    TransportType lastTransport = g_config.transport;
-    uint32_t lastBaudRate = g_config.uartBaudRate;
+    TransportType lastTransport = getDeviceConfig().transport;
 
     for (;;)
     {
       const DeviceConfig &config = getDeviceConfig();
 
-      if (consumeUartConfigChanged() || config.uartBaudRate != lastBaudRate)
-      {
-        Serial.begin(config.uartBaudRate);
-        lastBaudRate = config.uartBaudRate;
-      }
+      bool transportChanged = config.transport != lastTransport;
+      bool uartSettingsChanged = consumeUartConfigChanged();
 
-      if (config.transport != lastTransport)
+      if (transportChanged || uartSettingsChanged)
       {
-        if (config.transport != TransportType::Uart)
-        {
-          buffer = "";
-        }
+        uartTransportHandleConfigChange(uartSettingsChanged);
         lastTransport = config.transport;
       }
 
-      if (config.transport == TransportType::Uart)
-      {
-        while (Serial.available())
-        {
-          char c = static_cast<char>(Serial.read());
-
-          if (c == '\r')
-          {
-            continue;
-          }
-
-          if (c == '\n')
-          {
-            if (buffer.length() > 0)
-            {
-              CommandMessage message;
-              message.length = buffer.length();
-              buffer.toCharArray(message.payload, COMMAND_MESSAGE_MAX_LENGTH + 1);
-              message.payload[message.length] = '\0';
-              if (xQueueSend(g_commandQueue, &message, 0) != pdPASS)
-              {
-                sendQueueFull();
-              }
-              buffer = "";
-            }
-            continue;
-          }
-
-          if (buffer.length() >= COMMAND_MESSAGE_MAX_LENGTH)
-          {
-            sendInputTooLong();
-            buffer = "";
-            continue;
-          }
-
-          buffer += c;
-        }
-      }
-      else
-      {
-        while (Serial.available())
-        {
-          Serial.read();
-        }
-      }
-
+      uartTransportLoop();
       websocketTransportLoop();
       vTaskDelay(pdMS_TO_TICKS(2));
     }
@@ -128,22 +64,16 @@ namespace
 
 void setup()
 {
-  Serial.begin(UART_BAUD_DEFAULT);
+  bool configLoaded = loadDeviceConfig();
 
-  if (!loadDeviceConfig())
+  g_commandQueue = xQueueCreate(COMMAND_QUEUE_LENGTH, sizeof(CommandMessage));
+
+  uartTransportBegin(g_commandQueue);
+
+  if (!configLoaded)
   {
     Serial.println(F("{\"status\":\"warning\",\"message\":\"Using default configuration\"}"));
   }
-  else
-  {
-    const DeviceConfig &config = getDeviceConfig();
-    if (config.uartBaudRate != UART_BAUD_DEFAULT)
-    {
-      Serial.begin(config.uartBaudRate);
-    }
-  }
-
-  g_commandQueue = xQueueCreate(COMMAND_QUEUE_LENGTH, sizeof(CommandMessage));
   if (!g_commandQueue)
   {
     Serial.println(F("{\"status\":\"error\",\"message\":\"Failed to create command queue\"}"));
