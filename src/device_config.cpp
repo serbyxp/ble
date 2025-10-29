@@ -7,9 +7,33 @@ namespace
   constexpr const char *NAMESPACE = "device";
   Preferences g_preferences;
   DeviceConfig g_config;
+  volatile bool g_uartConfigDirty = false;
 
   const char *const TRANSPORT_UART = "uart";
   const char *const TRANSPORT_WEBSOCKET = "websocket";
+
+  constexpr uint32_t SUPPORTED_BAUD_RATES[] = {
+      9600,
+      19200,
+      38400,
+      57600,
+      115200,
+      230400,
+      460800,
+      921600,
+  };
+
+  uint32_t sanitizeBaudRate(uint32_t value)
+  {
+    for (uint32_t supported : SUPPORTED_BAUD_RATES)
+    {
+      if (supported == value)
+      {
+        return value;
+      }
+    }
+    return UART_BAUD_DEFAULT;
+  }
 
   TransportType sanitizeTransport(uint8_t value)
   {
@@ -33,6 +57,7 @@ bool loadDeviceConfig()
   }
 
   g_config.transport = sanitizeTransport(g_preferences.getUChar("transport", static_cast<uint8_t>(TransportType::Websocket)));
+  g_config.uartBaudRate = sanitizeBaudRate(g_preferences.getULong("uartBaud", UART_BAUD_DEFAULT));
 
   String ssid = g_preferences.getString("ssid", "");
   String password = g_preferences.getString("password", "");
@@ -54,6 +79,11 @@ bool saveDeviceConfig()
 
   bool ok = true;
   if (!g_preferences.putUChar("transport", static_cast<uint8_t>(g_config.transport)))
+  {
+    ok = false;
+  }
+
+  if (!g_preferences.putULong("uartBaud", g_config.uartBaudRate))
   {
     ok = false;
   }
@@ -114,4 +144,34 @@ bool parseTransportType(const String &value, TransportType &typeOut)
     return true;
   }
   return false;
+}
+
+bool isSupportedUartBaudRate(uint32_t baudRate)
+{
+  for (uint32_t supported : SUPPORTED_BAUD_RATES)
+  {
+    if (supported == baudRate)
+    {
+      return true;
+    }
+  }
+  return false;
+}
+
+const uint32_t *getSupportedUartBaudRates(size_t &count)
+{
+  count = sizeof(SUPPORTED_BAUD_RATES) / sizeof(SUPPORTED_BAUD_RATES[0]);
+  return SUPPORTED_BAUD_RATES;
+}
+
+void notifyUartConfigChanged()
+{
+  g_uartConfigDirty = true;
+}
+
+bool consumeUartConfigChanged()
+{
+  bool wasDirty = g_uartConfigDirty;
+  g_uartConfigDirty = false;
+  return wasDirty;
 }

@@ -14,9 +14,12 @@ struct WifiCredentials
   String password;
 };
 
+constexpr uint32_t UART_BAUD_DEFAULT = 115200;
+
 struct DeviceConfig
 {
   TransportType transport = TransportType::Websocket;
+  uint32_t uartBaudRate = UART_BAUD_DEFAULT;
   WifiCredentials wifi;
   bool hasWifiCredentials = false;
 };
@@ -56,3 +59,23 @@ const char *transportTypeToString(TransportType type);
  * The parsing is case-insensitive and accepts "uart" and "websocket".
  */
 bool parseTransportType(const String &value, TransportType &typeOut);
+
+/**
+ * @brief Check whether the provided baud rate is supported by the device.
+ */
+bool isSupportedUartBaudRate(uint32_t baudRate);
+
+/**
+ * @brief Obtain the list of supported UART baud rates.
+ */
+const uint32_t *getSupportedUartBaudRates(size_t &count);
+
+/**
+ * @brief Notify listeners that the UART configuration has changed.
+ */
+void notifyUartConfigChanged();
+
+/**
+ * @brief Consume any pending UART configuration change notification.
+ */
+bool consumeUartConfigChanged();

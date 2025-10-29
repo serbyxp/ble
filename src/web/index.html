@@ -107,7 +107,8 @@
 
       input[type="text"],
       input[type="password"],
-      textarea {
+      textarea,
+      select {
         width: 100%;
         padding: 0.75rem;
         border-radius: 12px;
@@ -122,6 +123,17 @@
         min-height: 160px;
         resize: vertical;
         font-family: "Fira Code", monospace;
+      }
+
+      select:disabled {
+        opacity: 0.55;
+        cursor: not-allowed;
+      }
+
+      .option.option-control {
+        flex-direction: column;
+        align-items: stretch;
+        gap: 0.5rem;
       }
 
       button {
@@ -240,6 +252,10 @@
           <input type="radio" name="transport" value="uart" />
           <span>UART (hardware serial console)</span>
         </label>
+        <div class="option option-control">
+          <label for="uart-baud"><span>UART Baud Rate</span></label>
+          <select id="uart-baud" disabled></select>
+        </div>
         <p class="hint">Changes are saved immediately in NVS.</p>
       </section>
       <section>
@@ -292,6 +308,7 @@
       const wifiStatusEl = document.getElementById("wifi-status");
       const apStatusEl = document.getElementById("ap-status");
       const transportInputs = document.querySelectorAll('input[name="transport"]');
+      const baudSelect = document.getElementById("uart-baud");
       const wifiForm = document.getElementById("wifi-form");
       const wifiSsidInput = document.getElementById("wifi-ssid");
       const wifiPasswordInput = document.getElementById("wifi-password");
@@ -307,7 +324,9 @@
       const sendBtn = document.getElementById("send");
       const clearBtn = document.getElementById("clear");
 
+      const UART_BAUD_DEFAULT = 115200;
       let currentTransport = "websocket";
+      let currentBaudRate = UART_BAUD_DEFAULT;
       let socket = null;
       let reconnectTimer = null;
 
@@ -333,6 +352,39 @@
           socket.close();
           socket = null;
         }
+      }
+
+      function updateBaudControlState() {
+        baudSelect.disabled = currentTransport !== "uart";
+      }
+
+      function populateBaudOptions(supportedRates, currentValue) {
+        const values = Array.isArray(supportedRates) && supportedRates.length > 0 ? supportedRates : [UART_BAUD_DEFAULT];
+        const normalized = Array.from(
+          new Set(
+            values
+              .map((value) => Number.parseInt(value, 10))
+              .filter((value) => Number.isFinite(value) && value > 0)
+          )
+        ).sort((a, b) => a - b);
+
+        baudSelect.innerHTML = "";
+        normalized.forEach((value) => {
+          const option = document.createElement("option");
+          option.value = String(value);
+          option.textContent = `${value} bps`;
+          baudSelect.appendChild(option);
+        });
+
+        const target = Number.isFinite(currentValue) && currentValue > 0 ? currentValue : UART_BAUD_DEFAULT;
+        const targetString = String(target);
+        if (!normalized.includes(target)) {
+          const option = document.createElement("option");
+          option.value = targetString;
+          option.textContent = `${target} bps`;
+          baudSelect.appendChild(option);
+        }
+        baudSelect.value = targetString;
       }
 
       function connectWebSocket() {
@@ -382,7 +434,15 @@
         connectWebSocket();
       }
 
-      async function updateTransport(transport) {
+      async function updateTransport(transport, optimistic = false) {
+        const previousTransport = currentTransport;
+        if (optimistic) {
+          currentTransport = transport;
+          updateBaudControlState();
+          transportInputs.forEach((input) => {
+            input.checked = input.value === currentTransport;
+          });
+        }
         try {
           const response = await fetch("/api/config", {
             method: "POST",
@@ -393,9 +453,33 @@
             throw new Error(`Failed to update transport: ${response.status}`);
           }
           currentTransport = transport;
+          updateBaudControlState();
+          await loadConfig();
+        } catch (error) {
+          currentTransport = previousTransport;
+          updateBaudControlState();
+          transportInputs.forEach((input) => {
+            input.checked = input.value === currentTransport;
+          });
+          appendLog(error.message, "error");
+        }
+      }
+
+      async function updateBaudRate(baud) {
+        try {
+          const response = await fetch("/api/config", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ uart: { baud } })
+          });
+          if (!response.ok) {
+            throw new Error(`Failed to update baud rate: ${response.status}`);
+          }
+          currentBaudRate = baud;
           await loadConfig();
         } catch (error) {
           appendLog(error.message, "error");
+          baudSelect.value = String(currentBaudRate);
         }
       }
 
@@ -485,11 +569,22 @@
           const data = await response.json();
           currentTransport = data.transport || "websocket";
 
+          const uartData = data.uart || {};
+          const supportedRates = Array.isArray(uartData.supported) ? uartData.supported : [];
+          const rawBaud = uartData.baud;
+          const parsedBaud =
+            typeof rawBaud === "number"
+              ? rawBaud
+              : Number.parseInt(rawBaud != null ? rawBaud : UART_BAUD_DEFAULT, 10);
+          currentBaudRate = Number.isFinite(parsedBaud) && parsedBaud > 0 ? parsedBaud : UART_BAUD_DEFAULT;
+          populateBaudOptions(supportedRates, currentBaudRate);
+
           transportInputs.forEach((input) => {
             input.checked = input.value === currentTransport;
           });
 
           transportStatusEl.textContent = currentTransport === "websocket" ? "WebSocket" : "UART";
+          updateBaudControlState();
 
           if (data.wifi) {
             const connected = data.wifi.connected;
@@ -506,6 +601,7 @@
           transportStatusEl.textContent = "Unavailable";
           wifiStatusEl.textContent = "Unavailable";
           apStatusEl.textContent = "Unavailable";
+          baudSelect.disabled = true;
           appendLog(error.message, "error");
         }
       }
@@ -513,9 +609,26 @@
       transportInputs.forEach((input) => {
         input.addEventListener("change", (event) => {
           if (event.target.checked) {
-            updateTransport(event.target.value);
+            updateTransport(event.target.value, true);
           }
         });
+      });
+
+      baudSelect.addEventListener("change", (event) => {
+        const value = Number.parseInt(event.target.value, 10);
+        if (!Number.isFinite(value) || value <= 0) {
+          baudSelect.value = String(currentBaudRate);
+          return;
+        }
+        if (value === currentBaudRate) {
+          baudSelect.value = String(currentBaudRate);
+          return;
+        }
+        if (currentTransport !== "uart") {
+          baudSelect.value = String(currentBaudRate);
+          return;
+        }
+        updateBaudRate(value);
       });
 
       wifiForm.addEventListener("submit", saveWifi);
