@@ -60,20 +60,38 @@ namespace
         return false;
       }
 
-      std::unique_ptr<char[]> buffer(new (std::nothrow) char[allowedBytes]);
+      size_t requiredLength = prefs.getString(key, nullptr, 0);
+      size_t bufferLength = requiredLength + 1;
+      if (bufferLength == 0)
+      {
+        return false;
+      }
+
+      std::unique_ptr<char[]> buffer(new (std::nothrow) char[bufferLength]);
       if (!buffer)
       {
         return false;
       }
 
-      size_t readLength = prefs.getString(key, buffer.get(), allowedBytes);
-      if (readLength > allowedLength)
+      size_t readLength = prefs.getString(key, buffer.get(), bufferLength);
+      if (readLength == 0 && requiredLength > 0)
       {
         return false;
       }
 
+      if (readLength >= bufferLength)
+      {
+        readLength = bufferLength - 1;
+      }
+
       buffer[readLength] = '\0';
       outValue = String(buffer.get());
+
+      if (allowedLength > 0 && outValue.length() > allowedLength)
+      {
+        outValue.remove(allowedLength);
+      }
+
       rewriteStoredValue(outValue);
       return true;
     };
