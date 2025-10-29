@@ -10,20 +10,41 @@ const char INDEX_HTML[] PROGMEM = R"rawliteral(
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>BLE Bridge Control</title>
     <style>
+      :root {
+        color-scheme: dark;
+      }
       body {
-        font-family: Arial, Helvetica, sans-serif;
+        font-family: "Inter", "Segoe UI", -apple-system, BlinkMacSystemFont, sans-serif;
         margin: 0;
-        background: #0f172a;
-        color: #f8fafc;
+        background: radial-gradient(circle at top, #1e293b, #0f172a 55%);
+        color: #e2e8f0;
+        min-height: 100vh;
         display: flex;
         flex-direction: column;
-        min-height: 100vh;
       }
       header {
-        padding: 1.5rem;
+        padding: 1.75rem 1.5rem;
         text-align: center;
-        background: #1e293b;
-        box-shadow: 0 2px 6px rgba(15, 23, 42, 0.6);
+        background: rgba(15, 23, 42, 0.85);
+        backdrop-filter: blur(8px);
+        border-bottom: 1px solid rgba(148, 163, 184, 0.2);
+      }
+      header h1 {
+        margin: 0 0 0.5rem;
+        font-size: 1.75rem;
+      }
+      header p {
+        margin: 0.25rem 0;
+      }
+      .status-grid {
+        margin-top: 1rem;
+        display: grid;
+        gap: 0.75rem;
+      }
+      @media (min-width: 640px) {
+        .status-grid {
+          grid-template-columns: repeat(3, minmax(0, 1fr));
+        }
       }
       main {
         flex: 1;
@@ -32,21 +53,58 @@ const char INDEX_HTML[] PROGMEM = R"rawliteral(
         gap: 1.5rem;
       }
       section {
-        background: rgba(30, 41, 59, 0.9);
+        background: rgba(15, 23, 42, 0.88);
+        border-radius: 16px;
         padding: 1.5rem;
-        border-radius: 12px;
-        box-shadow: 0 8px 24px rgba(15, 23, 42, 0.4);
+        box-shadow: 0 20px 45px rgba(15, 23, 42, 0.35);
+        border: 1px solid rgba(148, 163, 184, 0.15);
       }
+      h2 {
+        margin-top: 0;
+        font-size: 1.25rem;
+      }
+      .option {
+        display: flex;
+        align-items: center;
+        gap: 0.75rem;
+        padding: 0.6rem 0.9rem;
+        margin-bottom: 0.5rem;
+        border-radius: 12px;
+        background: rgba(30, 41, 59, 0.65);
+        border: 1px solid transparent;
+        transition: border-color 0.2s ease;
+      }
+      .option:hover {
+        border-color: rgba(94, 234, 212, 0.4);
+      }
+      .hint {
+        font-size: 0.85rem;
+        color: rgba(226, 232, 240, 0.7);
+      }
+      label span {
+        font-weight: 600;
+      }
+      form label {
+        display: block;
+        margin-bottom: 0.75rem;
+        font-weight: 600;
+      }
+      input[type="text"],
+      input[type="password"],
       textarea {
         width: 100%;
-        min-height: 160px;
-        border-radius: 12px;
         padding: 0.75rem;
+        border-radius: 12px;
         border: 1px solid rgba(148, 163, 184, 0.3);
-        background: rgba(15, 23, 42, 0.7);
+        background: rgba(15, 23, 42, 0.75);
         color: inherit;
-        resize: vertical;
         font-size: 0.95rem;
+        box-sizing: border-box;
+      }
+      textarea {
+        min-height: 160px;
+        resize: vertical;
+        font-family: "Fira Code", monospace;
       }
       button {
         padding: 0.75rem 1.5rem;
@@ -60,10 +118,13 @@ const char INDEX_HTML[] PROGMEM = R"rawliteral(
       }
       button:hover {
         transform: translateY(-1px);
-        box-shadow: 0 10px 30px rgba(56, 189, 248, 0.3);
+        box-shadow: 0 12px 30px rgba(56, 189, 248, 0.35);
       }
-      #status {
-        font-weight: 600;
+      .actions {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.75rem;
+        margin-top: 1rem;
       }
       #log {
         max-height: 240px;
@@ -78,57 +139,174 @@ const char INDEX_HTML[] PROGMEM = R"rawliteral(
         margin-bottom: 0.5rem;
         word-break: break-word;
       }
+      .log-entry[data-type="error"] {
+        color: #fda4af;
+      }
+      .log-entry[data-type="sent"] {
+        color: #a5b4fc;
+      }
+      .log-entry[data-type="device"] {
+        color: #5eead4;
+      }
+      .scan-results {
+        margin-top: 1.25rem;
+        border-top: 1px solid rgba(148, 163, 184, 0.25);
+        padding-top: 1rem;
+        display: none;
+      }
+      .scan-results.visible {
+        display: block;
+      }
+      .scan-results ul {
+        list-style: none;
+        margin: 0;
+        padding: 0;
+        display: grid;
+        gap: 0.5rem;
+      }
+      .scan-results button {
+        width: 100%;
+        justify-content: space-between;
+        display: flex;
+        align-items: center;
+        background: rgba(30, 41, 59, 0.75);
+        border-radius: 10px;
+        color: inherit;
+        padding: 0.6rem 0.9rem;
+      }
+      .scan-results button span {
+        font-weight: 600;
+      }
+      .scan-results small {
+        color: rgba(148, 163, 184, 0.8);
+      }
+      .hidden {
+        display: none !important;
+      }
     </style>
   </head>
   <body>
     <header>
       <h1>BLE Bridge Control</h1>
-      <p>Send JSON commands to the device over WebSocket.</p>
-      <p>Status: <span id="status">Connecting…</span></p>
+      <p>Manage device connectivity and send JSON commands.</p>
+      <div class="status-grid">
+        <div>Transport: <span id="transport-status">Loading…</span></div>
+        <div>WiFi: <span id="wifi-status">Checking…</span></div>
+        <div>Captive Portal: <span id="ap-status">Checking…</span></div>
+      </div>
     </header>
     <main>
       <section>
-        <h2>Command</h2>
-        <p>
-          Write a JSON command (for example,
-          <code>{"device":"keyboard","action":"tap","key":"ENTER"}</code>)
-          and press Send.
-        </p>
-        <textarea id="command" placeholder="{\n  &quot;device&quot;: &quot;keyboard&quot;,\n  &quot;action&quot;: &quot;tap&quot;,\n  &quot;key&quot;: &quot;ENTER&quot;\n}"></textarea>
-        <div style="margin-top: 1rem; display: flex; gap: 1rem; flex-wrap: wrap;">
-          <button id="send">Send</button>
-          <button id="clear">Clear Log</button>
-        </div>
+        <h2>Transport</h2>
+        <p class="hint">Select how commands are delivered to the bridge.</p>
+        <label class="option">
+          <input type="radio" name="transport" value="websocket" />
+          <span>WebSocket (recommended for web control)</span>
+        </label>
+        <label class="option">
+          <input type="radio" name="transport" value="uart" />
+          <span>UART (hardware serial console)</span>
+        </label>
+        <p class="hint">Changes are saved immediately in NVS.</p>
       </section>
       <section>
+        <h2>WiFi Configuration</h2>
+        <p class="hint">Configure station credentials while the device remains discoverable via the captive portal.</p>
+        <form id="wifi-form" autocomplete="off">
+          <label>
+            Network SSID
+            <input id="wifi-ssid" type="text" name="ssid" placeholder="MyNetwork" />
+          </label>
+          <label>
+            Password
+            <input id="wifi-password" type="password" name="password" placeholder="Enter password" />
+          </label>
+          <div class="actions">
+            <button type="submit">Save WiFi</button>
+            <button type="button" id="wifi-forget">Forget</button>
+            <button type="button" id="wifi-scan">Scan Networks</button>
+          </div>
+        </form>
+        <div id="scan-results" class="scan-results">
+          <h3>Available Networks</h3>
+          <ul id="networks"></ul>
+        </div>
+      </section>
+      <section id="command-section">
+        <h2>Command</h2>
+        <p class="hint">
+          WebSocket transport must be active to send commands from this page.
+        </p>
+        <p>
+          Example:
+          <code>{"device":"keyboard","action":"tap","key":"ENTER"}</code>
+        </p>
+        <textarea id="command" placeholder="{\n  &quot;device&quot;: &quot;keyboard&quot;,\n  &quot;action&quot;: &quot;tap&quot;,\n  &quot;key&quot;: &quot;ENTER&quot;\n}"></textarea>
+        <div class="actions">
+          <button id="send" type="button">Send</button>
+          <button id="clear" type="button">Clear Log</button>
+        </div>
+        <p>Status: <span id="status">Waiting…</span></p>
+      </section>
+      <section id="log-section">
         <h2>Log</h2>
         <div id="log"></div>
       </section>
     </main>
     <script>
+      const transportStatusEl = document.getElementById("transport-status");
+      const wifiStatusEl = document.getElementById("wifi-status");
+      const apStatusEl = document.getElementById("ap-status");
+      const transportInputs = document.querySelectorAll('input[name="transport"]');
+      const wifiForm = document.getElementById("wifi-form");
+      const wifiSsidInput = document.getElementById("wifi-ssid");
+      const wifiPasswordInput = document.getElementById("wifi-password");
+      const wifiForgetButton = document.getElementById("wifi-forget");
+      const wifiScanButton = document.getElementById("wifi-scan");
+      const networksList = document.getElementById("networks");
+      const scanResults = document.getElementById("scan-results");
+      const commandSection = document.getElementById("command-section");
+      const logSection = document.getElementById("log-section");
       const statusEl = document.getElementById("status");
       const logEl = document.getElementById("log");
       const commandEl = document.getElementById("command");
       const sendBtn = document.getElementById("send");
       const clearBtn = document.getElementById("clear");
 
-      const wsProtocol = location.protocol === "https:" ? "wss" : "ws";
-      const wsPort = 81;
-      const wsUrl = `${wsProtocol}://${location.hostname}:${wsPort}/`;
-
-      let socket;
+      let currentTransport = "websocket";
+      let socket = null;
+      let reconnectTimer = null;
 
       function appendLog(message, type = "info") {
         const entry = document.createElement("div");
         entry.className = "log-entry";
+        entry.dataset.type = type;
         entry.textContent = `[${new Date().toLocaleTimeString()}] ${type.toUpperCase()}: ${message}`;
         logEl.appendChild(entry);
         logEl.scrollTop = logEl.scrollHeight;
       }
 
-      function connect() {
-        socket = new WebSocket(wsUrl);
+      function clearReconnectTimer() {
+        if (reconnectTimer) {
+          clearTimeout(reconnectTimer);
+          reconnectTimer = null;
+        }
+      }
+
+      function closeSocket() {
+        clearReconnectTimer();
+        if (socket) {
+          socket.close();
+          socket = null;
+        }
+      }
+
+      function connectWebSocket() {
+        closeSocket();
+        const protocol = location.protocol === "https:" ? "wss" : "ws";
+        const wsUrl = `${protocol}://${location.hostname}:81/`;
         statusEl.textContent = "Connecting…";
+        socket = new WebSocket(wsUrl);
 
         socket.addEventListener("open", () => {
           statusEl.textContent = "Connected";
@@ -136,9 +314,12 @@ const char INDEX_HTML[] PROGMEM = R"rawliteral(
         });
 
         socket.addEventListener("close", () => {
-          statusEl.textContent = "Disconnected";
-          appendLog("WebSocket disconnected", "system");
-          setTimeout(connect, 1000);
+          if (currentTransport === "websocket") {
+            appendLog("WebSocket disconnected", "system");
+            statusEl.textContent = "Disconnected";
+            clearReconnectTimer();
+            reconnectTimer = setTimeout(connectWebSocket, 1200);
+          }
         });
 
         socket.addEventListener("error", (event) => {
@@ -150,7 +331,168 @@ const char INDEX_HTML[] PROGMEM = R"rawliteral(
         });
       }
 
+      function ensureSocket() {
+        if (currentTransport !== "websocket") {
+          statusEl.textContent = "WebSocket disabled (UART mode)";
+          closeSocket();
+          commandSection.classList.add("hidden");
+          logSection.classList.remove("hidden");
+          return;
+        }
+
+        commandSection.classList.remove("hidden");
+        logSection.classList.remove("hidden");
+        if (socket && socket.readyState === WebSocket.OPEN) {
+          return;
+        }
+        connectWebSocket();
+      }
+
+      async function updateTransport(transport) {
+        try {
+          const response = await fetch("/api/config", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ transport })
+          });
+          if (!response.ok) {
+            throw new Error(`Failed to update transport: ${response.status}`);
+          }
+          currentTransport = transport;
+          await loadConfig();
+        } catch (error) {
+          appendLog(error.message, "error");
+        }
+      }
+
+      function renderNetworks(networks) {
+        networksList.innerHTML = "";
+        if (!networks || networks.length === 0) {
+          const empty = document.createElement("li");
+          empty.textContent = "No networks found. Try scanning again.";
+          networksList.appendChild(empty);
+          scanResults.classList.add("visible");
+          return;
+        }
+
+        networks.forEach((network) => {
+          const item = document.createElement("li");
+          const button = document.createElement("button");
+          button.type = "button";
+          button.innerHTML = `<span>${network.ssid || "(hidden)"}</span><small>${network.rssi} dBm${network.secure ? " · 🔒" : ""}</small>`;
+          button.addEventListener("click", () => {
+            wifiSsidInput.value = network.ssid;
+            wifiPasswordInput.focus();
+          });
+          item.appendChild(button);
+          networksList.appendChild(item);
+        });
+        scanResults.classList.add("visible");
+      }
+
+      async function scanNetworks() {
+        try {
+          const response = await fetch("/api/scan");
+          if (!response.ok) {
+            throw new Error(`Scan failed: ${response.status}`);
+          }
+          const payload = await response.json();
+          renderNetworks(payload.networks || []);
+        } catch (error) {
+          appendLog(error.message, "error");
+        }
+      }
+
+      async function saveWifi(event) {
+        event.preventDefault();
+        const ssid = wifiSsidInput.value.trim();
+        const password = wifiPasswordInput.value;
+        const body = { wifi: { ssid, password } };
+        try {
+          const response = await fetch("/api/config", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(body)
+          });
+          if (!response.ok) {
+            throw new Error(`Failed to save WiFi: ${response.status}`);
+          }
+          wifiPasswordInput.value = "";
+          await loadConfig();
+        } catch (error) {
+          appendLog(error.message, "error");
+        }
+      }
+
+      async function forgetWifi() {
+        try {
+          const response = await fetch("/api/config", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ wifi: { forget: true } })
+          });
+          if (!response.ok) {
+            throw new Error(`Failed to forget WiFi: ${response.status}`);
+          }
+          wifiSsidInput.value = "";
+          wifiPasswordInput.value = "";
+          await loadConfig();
+        } catch (error) {
+          appendLog(error.message, "error");
+        }
+      }
+
+      async function loadConfig() {
+        try {
+          const response = await fetch("/api/config");
+          if (!response.ok) {
+            throw new Error(`Config request failed: ${response.status}`);
+          }
+          const data = await response.json();
+          currentTransport = data.transport || "websocket";
+
+          transportInputs.forEach((input) => {
+            input.checked = input.value === currentTransport;
+          });
+
+          transportStatusEl.textContent = currentTransport === "websocket" ? "WebSocket" : "UART";
+
+          if (data.wifi) {
+            const connected = data.wifi.connected;
+            const ssid = data.wifi.ssid || "(hidden)";
+            wifiStatusEl.textContent = connected ? `Connected to ${ssid}${data.wifi.ip ? ` — ${data.wifi.ip}` : ""}` : "Not connected";
+            apStatusEl.textContent = data.wifi.apActive ? `Enabled${data.wifi.portalUrl ? ` — ${data.wifi.portalUrl}` : ""}` : "Disabled";
+            if (data.wifi.ssid) {
+              wifiSsidInput.value = data.wifi.ssid;
+            }
+          }
+
+          ensureSocket();
+        } catch (error) {
+          transportStatusEl.textContent = "Unavailable";
+          wifiStatusEl.textContent = "Unavailable";
+          apStatusEl.textContent = "Unavailable";
+          appendLog(error.message, "error");
+        }
+      }
+
+      transportInputs.forEach((input) => {
+        input.addEventListener("change", (event) => {
+          if (event.target.checked) {
+            updateTransport(event.target.value);
+          }
+        });
+      });
+
+      wifiForm.addEventListener("submit", saveWifi);
+      wifiForgetButton.addEventListener("click", forgetWifi);
+      wifiScanButton.addEventListener("click", scanNetworks);
+
       sendBtn.addEventListener("click", () => {
+        if (currentTransport !== "websocket") {
+          appendLog("Enable WebSocket transport to send commands from the browser.", "error");
+          return;
+        }
         if (!socket || socket.readyState !== WebSocket.OPEN) {
           appendLog("WebSocket is not connected", "error");
           return;
@@ -168,7 +510,13 @@ const char INDEX_HTML[] PROGMEM = R"rawliteral(
         logEl.innerHTML = "";
       });
 
-      connect();
+      document.addEventListener("visibilitychange", () => {
+        if (!document.hidden && currentTransport === "websocket") {
+          ensureSocket();
+        }
+      });
+
+      loadConfig();
     </script>
   </body>
 </html>
