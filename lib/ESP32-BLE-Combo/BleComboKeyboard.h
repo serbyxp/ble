@@ -7,6 +7,8 @@
 #include "BLEHIDDevice.h"
 #include "BLECharacteristic.h"
 #include "Print.h"
+#include <freertos/FreeRTOS.h>
+#include <freertos/task.h>
 
 const uint8_t KEY_LEFT_CTRL = 0x80;
 const uint8_t KEY_LEFT_SHIFT = 0x81;
@@ -92,6 +94,7 @@ private:
   BLECharacteristic *inputKeyboard;
   BLECharacteristic *outputKeyboard;
   BLECharacteristic *inputMediaKeys;
+  TaskHandle_t serverTaskHandle;
 
   KeyReport _keyReport;
   MediaKeyReport _mediaKeyReport;
