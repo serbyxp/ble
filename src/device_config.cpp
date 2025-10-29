@@ -87,7 +87,7 @@ namespace
       copyLength = MAX_STORED_STRING_LENGTH + 1;
     }
 
-    std::unique_ptr<char[]> buffer(new (std::nothrow) char[copyLength + 1]);
+    std::unique_ptr<char[]> buffer(new (std::nothrow) char[copyLength]);
     if (!buffer)
     {
       return String();
@@ -104,9 +104,13 @@ namespace
       return String();
     }
 
-    if (read > copyLength)
+    if (read >= copyLength)
     {
-      read = copyLength;
+      buffer[copyLength - 1] = '\0';
+    }
+    else
+    {
+      buffer[read] = '\0';
     }
     buffer[read] = '\0';
     return String(buffer.get());
