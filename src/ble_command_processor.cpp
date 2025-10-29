@@ -170,6 +170,8 @@ namespace
   std::string defaultBleManufacturer;
   bool defaultManufacturerCaptured = false;
 
+  void sendEvent(const char *name, const char *detail = nullptr);
+
   void shutdownBleStack()
   {
     if (!bleStackActive)
