@@ -5,8 +5,6 @@
 #include <BleCombo.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/portmacro.h>
-#include <memory>
-#include <new>
 
 namespace
 {
@@ -22,10 +20,6 @@ namespace
   const char *const KEY_BLE_NAME = "bleName";
   const char *const KEY_BLE_MANUFACTURER = "bleManuf";
 
-  constexpr size_t MAX_STORED_STRING_LENGTH = 256;
-
-  bool writePreferenceString(Preferences &prefs, const char *key, const String &value, size_t maxLength = 0);
-
   String readPreferenceString(Preferences &prefs, const char *key, size_t maxLength = 0)
   {
     if (!prefs.isKey(key))
@@ -33,152 +27,23 @@ namespace
       return String();
     }
 
-    size_t allowedLength = (maxLength > 0) ? maxLength : MAX_STORED_STRING_LENGTH;
-    size_t allowedBytes = allowedLength + 1;
-
-    auto rewriteStoredValue = [&](const String &newValue) {
-      Preferences migrator;
-      if (!migrator.begin(NAMESPACE, false))
-      {
-        return;
-      }
-
-      if (newValue.length() == 0)
-      {
-        migrator.remove(key);
-      }
-      else
-      {
-        writePreferenceString(migrator, key, newValue, maxLength);
-      }
-      migrator.end();
-    };
-
-    auto readLegacyString = [&](String &outValue) -> bool {
-      if (prefs.getType(key) != PT_STR)
-      {
-        return false;
-      }
-
-      size_t requiredLength = prefs.getString(key, nullptr, 0);
-      size_t bufferLength = requiredLength + 1;
-      if (bufferLength == 0)
-      {
-        return false;
-      }
-
-      std::unique_ptr<char[]> buffer(new (std::nothrow) char[bufferLength]);
-      if (!buffer)
-      {
-        return false;
-      }
-
-      size_t readLength = prefs.getString(key, buffer.get(), bufferLength);
-      if (readLength == 0 && requiredLength > 0)
-      {
-        return false;
-      }
-
-      if (readLength >= bufferLength)
-      {
-        readLength = bufferLength - 1;
-      }
-
-      buffer[readLength] = '\0';
-      outValue = String(buffer.get());
-
-      if (allowedLength > 0 && outValue.length() > allowedLength)
-      {
-        outValue.remove(allowedLength);
-      }
-
-      rewriteStoredValue(outValue);
-      return true;
-    };
-
-    size_t storedLength = prefs.getBytesLength(key);
-    if (storedLength == 0)
+    String value = prefs.getString(key, "");
+    if (maxLength > 0 && value.length() > maxLength)
     {
-      String legacyValue;
-      if (readLegacyString(legacyValue))
-      {
-        return legacyValue;
-      }
-      return String();
+      value.remove(maxLength);
     }
-
-    if (storedLength > allowedBytes)
-    {
-      String legacyValue;
-      if (readLegacyString(legacyValue))
-      {
-        return legacyValue;
-      }
-
-      rewriteStoredValue(String());
-      return String();
-    }
-
-    size_t bufferSize = storedLength + 1;
-    std::unique_ptr<char[]> buffer(new (std::nothrow) char[bufferSize]);
-    if (!buffer)
-    {
-      return String();
-    }
-
-    size_t read = prefs.getBytes(key, buffer.get(), storedLength);
-    if (read == 0)
-    {
-      String legacyValue;
-      if (readLegacyString(legacyValue))
-      {
-        return legacyValue;
-      }
-      return String();
-    }
-
-    if (read >= bufferSize)
-    {
-      read = bufferSize - 1;
-    }
-    buffer[read] = '\0';
-
-    String value(buffer.get());
-    bool needsRewrite = false;
-
-    if (read < storedLength)
-    {
-      needsRewrite = true;
-    }
-    else if (storedLength > 0 && buffer[storedLength - 1] != '\0')
-    {
-      needsRewrite = true;
-    }
-
-    if (value.length() > allowedLength)
-    {
-      value.remove(allowedLength);
-      needsRewrite = true;
-    }
-
-    if (needsRewrite)
-    {
-      rewriteStoredValue(value);
-    }
-
     return value;
   }
 
-  bool writePreferenceString(Preferences &prefs, const char *key, const String &value, size_t maxLength)
+  bool writePreferenceString(Preferences &prefs, const char *key, const String &value, size_t maxLength = 0)
   {
     if (maxLength > 0 && value.length() > maxLength)
     {
       return false;
     }
 
-    size_t bytesToWrite = value.length() + 1;
-    size_t written = prefs.putBytes(key, value.c_str(), bytesToWrite);
-    return written == bytesToWrite;
+    size_t written = prefs.putString(key, value);
+    return written > 0;
   }
 
   constexpr uint32_t SUPPORTED_BAUD_RATES[] = {
