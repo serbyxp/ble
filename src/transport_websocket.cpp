@@ -205,8 +205,13 @@ namespace
     bool wifiChanged = false;
     bool uartChanged = false;
 
-    if (!doc["transport"].isNull())
+    if (doc.containsKey("transport"))
     {
+      if (doc["transport"].isNull())
+      {
+        respondError(400, "Transport option cannot be null");
+        return;
+      }
       TransportType newTransport;
       if (!parseTransportType(doc["transport"].as<String>(), newTransport))
       {
@@ -220,11 +225,21 @@ namespace
       }
     }
 
-    if (!doc["uart"].isNull())
+    if (doc.containsKey("uart"))
     {
-      JsonObject uart = doc["uart"].as<JsonObject>();
-      if (!uart["baud"].isNull())
+      if (doc["uart"].isNull() || !doc["uart"].is<JsonObject>())
       {
+        respondError(400, "UART settings must be an object");
+        return;
+      }
+      JsonObject uart = doc["uart"].as<JsonObject>();
+      if (uart.containsKey("baud"))
+      {
+        if (uart["baud"].isNull())
+        {
+          respondError(400, "UART baud rate cannot be null");
+          return;
+        }
         if (!uart["baud"].is<uint32_t>())
         {
           respondError(400, "Invalid UART baud rate");
@@ -245,10 +260,28 @@ namespace
       }
     }
 
-    if (!doc["wifi"].isNull())
+    if (doc.containsKey("wifi"))
     {
+      if (doc["wifi"].isNull() || !doc["wifi"].is<JsonObject>())
+      {
+        respondError(400, "WiFi settings must be an object");
+        return;
+      }
       JsonObject wifi = doc["wifi"].as<JsonObject>();
-      bool forget = !wifi["forget"].isNull() && wifi["forget"].as<bool>();
+      if (wifi.containsKey("forget"))
+      {
+        if (wifi["forget"].isNull())
+        {
+          respondError(400, "WiFi forget flag cannot be null");
+          return;
+        }
+        if (!wifi["forget"].is<bool>())
+        {
+          respondError(400, "WiFi forget flag must be a boolean");
+          return;
+        }
+      }
+      bool forget = wifi.containsKey("forget") && wifi["forget"].as<bool>();
       if (forget)
       {
         if (config.hasWifiCredentials || !config.wifi.ssid.isEmpty())
@@ -262,8 +295,18 @@ namespace
       }
       else
       {
-        bool hasSsid = !wifi["ssid"].isNull();
-        bool hasPassword = !wifi["password"].isNull();
+        if (wifi.containsKey("ssid") && wifi["ssid"].isNull())
+        {
+          respondError(400, "WiFi SSID cannot be null");
+          return;
+        }
+        if (wifi.containsKey("password") && wifi["password"].isNull())
+        {
+          respondError(400, "WiFi password cannot be null");
+          return;
+        }
+        bool hasSsid = wifi.containsKey("ssid");
+        bool hasPassword = wifi.containsKey("password");
         String newSsid = hasSsid ? String(wifi["ssid"].as<const char *>()) : config.wifi.ssid;
         String newPassword = hasPassword ? String(wifi["password"].as<const char *>()) : config.wifi.password;
         bool newHasCredentials = newSsid.length() > 0;
