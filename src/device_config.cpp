@@ -1,10 +1,12 @@
 #include "device_config.h"
 #include "transport_websocket.h"
 
+#include <Arduino.h>
 #include <Preferences.h>
 #include <BleCombo.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/portmacro.h>
+#include <nvs.h>
 
 namespace
 {
@@ -87,7 +89,24 @@ bool loadDeviceConfig()
 {
   if (!g_preferences.begin(NAMESPACE, true))
   {
-    return false;
+    esp_err_t lastError = g_preferences.lastError();
+    if (lastError != ESP_ERR_NVS_NOT_FOUND)
+    {
+      return false;
+    }
+
+    if (!g_preferences.begin(NAMESPACE, false))
+    {
+      return false;
+    }
+
+    Serial.printf("[CFG] Initialized preferences namespace '%s' on first boot.\n", NAMESPACE);
+    g_preferences.end();
+
+    if (!g_preferences.begin(NAMESPACE, true))
+    {
+      return false;
+    }
   }
 
   g_config.transport = sanitizeTransport(g_preferences.getUChar("transport", static_cast<uint8_t>(TransportType::Websocket)));
