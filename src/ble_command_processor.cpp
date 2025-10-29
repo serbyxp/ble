@@ -8,6 +8,9 @@
 #include <BLEDevice.h>
 #include <string>
 
+#include <freertos/FreeRTOS.h>
+#include <freertos/task.h>
+
 #include <stdlib.h>
 #include <strings.h>
 
@@ -1144,8 +1147,16 @@ void BleCommandProcessor::applyIdentityFromConfig()
 
   Keyboard.end();
   delay(10);
+
+  TaskHandle_t existingServerTask = xTaskGetHandle("server");
+  if (existingServerTask != nullptr)
+  {
+    vTaskDelete(existingServerTask);
+    vTaskDelay(pdMS_TO_TICKS(10));
+  }
+
   BLEDevice::deinit(true);
-  delay(10);
+  vTaskDelay(pdMS_TO_TICKS(10));
 
   Keyboard.deviceName = desiredName;
   Keyboard.deviceManufacturer = desiredManufacturer;
