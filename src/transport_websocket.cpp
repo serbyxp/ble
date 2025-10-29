@@ -253,4 +253,3 @@ void websocketTransportEnd()
   WiFi.mode(WIFI_OFF);
   g_running = false;
 }
-
