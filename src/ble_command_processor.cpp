@@ -222,7 +222,7 @@ namespace
     broadcastJson(payload);
   }
 
-  void sendEvent(const char *name, const char *detail = nullptr)
+  void sendEvent(const char *name, const char *detail)
   {
     String payload = F("{\"event\":\"");
     payload += name;
