@@ -146,6 +146,20 @@ void BleComboKeyboard::begin(void)
 
 void BleComboKeyboard::end(void)
 {
+  if (this->connectionStatus != nullptr)
+  {
+    this->connectionStatus->connected = false;
+    this->connectionStatus->inputKeyboard = nullptr;
+    this->connectionStatus->outputKeyboard = nullptr;
+    this->connectionStatus->inputMediaKeys = nullptr;
+    this->connectionStatus->inputMouse = nullptr;
+  }
+
+  this->hid = nullptr;
+  this->inputKeyboard = nullptr;
+  this->outputKeyboard = nullptr;
+  this->inputMediaKeys = nullptr;
+  this->inputMouse = nullptr;
 }
 
 bool BleComboKeyboard::isConnected(void) {
