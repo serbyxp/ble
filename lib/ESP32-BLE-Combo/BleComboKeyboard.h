@@ -7,6 +7,8 @@
 #include "BLEHIDDevice.h"
 #include "BLECharacteristic.h"
 #include "Print.h"
+#include <freertos/FreeRTOS.h>
+#include <freertos/task.h>
 
 
 const uint8_t KEY_LEFT_CTRL = 0x80;

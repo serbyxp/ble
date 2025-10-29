@@ -370,7 +370,12 @@ namespace
 
     if (configChanged)
     {
-      saveDeviceConfig();
+      if (!saveDeviceConfig())
+      {
+        loadDeviceConfig();
+        respondError(503, "Failed to persist configuration. Please retry or power-cycle the device.");
+        return;
+      }
     }
 
     if (bleIdentityChanged)

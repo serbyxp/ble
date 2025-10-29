@@ -6,6 +6,8 @@
 #include "HIDTypes.h"
 #include <driver/adc.h>
 #include "sdkconfig.h"
+#include <freertos/FreeRTOS.h>
+#include <freertos/task.h>
 
 #include "BleConnectionStatus.h"
 #include "KeyboardOutputCallbacks.h"
@@ -131,7 +133,7 @@ static const uint8_t _hidReportDescriptor[] = {
   END_COLLECTION(0)          // END_COLLECTION
 };
 
-BleComboKeyboard::BleComboKeyboard(std::string deviceName, std::string deviceManufacturer, uint8_t batteryLevel) : hid(0)
+BleComboKeyboard::BleComboKeyboard(std::string deviceName, std::string deviceManufacturer, uint8_t batteryLevel) : hid(0), serverTaskHandle(nullptr)
 {
   this->deviceName = deviceName;
   this->deviceManufacturer = deviceManufacturer;
@@ -146,6 +148,28 @@ void BleComboKeyboard::begin(void)
 
 void BleComboKeyboard::end(void)
 {
+        if (serverTaskHandle != nullptr)
+        {
+                TaskHandle_t taskToStop = serverTaskHandle;
+                serverTaskHandle = nullptr;
+                vTaskDelete(taskToStop);
+        }
+
+        if (hid != nullptr)
+        {
+                delete hid;
+                hid = nullptr;
+        }
+
+        inputKeyboard = nullptr;
+        outputKeyboard = nullptr;
+        inputMediaKeys = nullptr;
+        inputMouse = nullptr;
+
+        if (connectionStatus != nullptr)
+        {
+                connectionStatus->connected = false;
+        }
 }
 
 bool BleComboKeyboard::isConnected(void) {
