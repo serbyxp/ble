@@ -9,4 +9,5 @@ public:
   void handleCommand(const CommandMessage &message) const;
   void pollConnection();
   void sendReadyEvent() const;
+  void applyIdentityFromConfig();
 };

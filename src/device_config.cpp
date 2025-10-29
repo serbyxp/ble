@@ -3,6 +3,8 @@
 
 #include <Preferences.h>
 #include <BleCombo.h>
+#include <freertos/FreeRTOS.h>
+#include <freertos/portmacro.h>
 
 namespace
 {
@@ -10,6 +12,8 @@ namespace
   Preferences g_preferences;
   DeviceConfig g_config;
   volatile bool g_uartConfigDirty = false;
+  bool g_bleIdentityDirty = false;
+  portMUX_TYPE g_bleIdentityMux = portMUX_INITIALIZER_UNLOCKED;
 
   const char *const TRANSPORT_UART = "uart";
   const char *const TRANSPORT_WEBSOCKET = "websocket";
@@ -209,6 +213,22 @@ bool consumeUartConfigChanged()
 {
   bool wasDirty = g_uartConfigDirty;
   g_uartConfigDirty = false;
+  return wasDirty;
+}
+
+void notifyBleIdentityChanged()
+{
+  portENTER_CRITICAL(&g_bleIdentityMux);
+  g_bleIdentityDirty = true;
+  portEXIT_CRITICAL(&g_bleIdentityMux);
+}
+
+bool consumeBleIdentityChanged()
+{
+  portENTER_CRITICAL(&g_bleIdentityMux);
+  bool wasDirty = g_bleIdentityDirty;
+  g_bleIdentityDirty = false;
+  portEXIT_CRITICAL(&g_bleIdentityMux);
   return wasDirty;
 }
 

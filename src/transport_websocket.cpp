@@ -210,6 +210,7 @@ namespace
     bool configChanged = false;
     bool wifiChanged = false;
     bool uartChanged = false;
+    bool bleIdentityChanged = false;
 
     if (!doc["transport"].isNull())
     {
@@ -323,6 +324,7 @@ namespace
             config.bleDeviceName = "";
             config.hasBleDeviceName = false;
             configChanged = true;
+            bleIdentityChanged = true;
           }
         }
         else if (!config.hasBleDeviceName || config.bleDeviceName != newName)
@@ -330,6 +332,7 @@ namespace
           config.bleDeviceName = newName;
           config.hasBleDeviceName = true;
           configChanged = true;
+          bleIdentityChanged = true;
         }
       }
 
@@ -352,6 +355,7 @@ namespace
             config.bleManufacturerName = "";
             config.hasBleManufacturerName = false;
             configChanged = true;
+            bleIdentityChanged = true;
           }
         }
         else if (!config.hasBleManufacturerName || config.bleManufacturerName != newManufacturer)
@@ -359,6 +363,7 @@ namespace
           config.bleManufacturerName = newManufacturer;
           config.hasBleManufacturerName = true;
           configChanged = true;
+          bleIdentityChanged = true;
         }
       }
     }
@@ -366,6 +371,11 @@ namespace
     if (configChanged)
     {
       saveDeviceConfig();
+    }
+
+    if (bleIdentityChanged)
+    {
+      notifyBleIdentityChanged();
     }
 
     if (uartChanged)
