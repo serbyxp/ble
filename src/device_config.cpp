@@ -33,36 +33,48 @@ namespace
       return String();
     }
 
+    size_t allowedLength = (maxLength > 0) ? maxLength : MAX_STORED_STRING_LENGTH;
+    size_t allowedBytes = allowedLength + 1;
+
+    auto rewriteStoredValue = [&](const String &newValue) {
+      Preferences migrator;
+      if (!migrator.begin(NAMESPACE, false))
+      {
+        return;
+      }
+
+      if (newValue.length() == 0)
+      {
+        migrator.remove(key);
+      }
+      else
+      {
+        writePreferenceString(migrator, key, newValue, maxLength);
+      }
+      migrator.end();
+    };
+
     auto readLegacyString = [&](String &outValue) -> bool {
       if (prefs.getType(key) != PT_STR)
       {
         return false;
       }
 
-      size_t allowedLength = (maxLength > 0) ? maxLength : MAX_STORED_STRING_LENGTH;
-      std::unique_ptr<char[]> buffer(new (std::nothrow) char[allowedLength + 1]);
+      std::unique_ptr<char[]> buffer(new (std::nothrow) char[allowedBytes]);
       if (!buffer)
       {
         return false;
       }
 
-      size_t readLength = prefs.getString(key, buffer.get(), allowedLength + 1);
+      size_t readLength = prefs.getString(key, buffer.get(), allowedBytes);
       if (readLength > allowedLength)
       {
         return false;
       }
 
-      size_t terminatorIndex = (readLength <= allowedLength) ? readLength : allowedLength;
-      buffer[terminatorIndex] = '\0';
+      buffer[readLength] = '\0';
       outValue = String(buffer.get());
-
-      Preferences migrator;
-      if (migrator.begin(NAMESPACE, false))
-      {
-        writePreferenceString(migrator, key, outValue, maxLength);
-        migrator.end();
-      }
-
+      rewriteStoredValue(outValue);
       return true;
     };
 
@@ -77,23 +89,26 @@ namespace
       return String();
     }
 
-    size_t copyLength = storedLength;
-    if (maxLength > 0 && copyLength > (maxLength + 1))
+    if (storedLength > allowedBytes)
     {
-      copyLength = maxLength + 1;
-    }
-    else if (maxLength == 0 && copyLength > (MAX_STORED_STRING_LENGTH + 1))
-    {
-      copyLength = MAX_STORED_STRING_LENGTH + 1;
+      String legacyValue;
+      if (readLegacyString(legacyValue))
+      {
+        return legacyValue;
+      }
+
+      rewriteStoredValue(String());
+      return String();
     }
 
-    std::unique_ptr<char[]> buffer(new (std::nothrow) char[copyLength]);
+    size_t bufferSize = storedLength + 1;
+    std::unique_ptr<char[]> buffer(new (std::nothrow) char[bufferSize]);
     if (!buffer)
     {
       return String();
     }
 
-    size_t read = prefs.getBytes(key, buffer.get(), copyLength);
+    size_t read = prefs.getBytes(key, buffer.get(), storedLength);
     if (read == 0)
     {
       String legacyValue;
@@ -104,16 +119,36 @@ namespace
       return String();
     }
 
-    if (read >= copyLength)
+    if (read >= bufferSize)
     {
-      buffer[copyLength - 1] = '\0';
-    }
-    else
-    {
-      buffer[read] = '\0';
+      read = bufferSize - 1;
     }
     buffer[read] = '\0';
-    return String(buffer.get());
+
+    String value(buffer.get());
+    bool needsRewrite = false;
+
+    if (read < storedLength)
+    {
+      needsRewrite = true;
+    }
+    else if (storedLength > 0 && buffer[storedLength - 1] != '\0')
+    {
+      needsRewrite = true;
+    }
+
+    if (value.length() > allowedLength)
+    {
+      value.remove(allowedLength);
+      needsRewrite = true;
+    }
+
+    if (needsRewrite)
+    {
+      rewriteStoredValue(value);
+    }
+
+    return value;
   }
 
   bool writePreferenceString(Preferences &prefs, const char *key, const String &value, size_t maxLength)
