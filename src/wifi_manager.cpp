@@ -165,10 +165,10 @@ namespace
       return;
     }
 
-    if (g_accessPointActive)
+    if (!g_accessPointActive)
     {
-      stopAccessPoint();
-      WiFi.mode(WIFI_STA);
+      WiFi.mode(WIFI_AP_STA);
+      startAccessPoint();
     }
   }
 
