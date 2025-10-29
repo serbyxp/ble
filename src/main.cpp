@@ -55,6 +55,11 @@ namespace
         g_processor.handleCommand(message);
       }
 
+      if (consumeBleIdentityChanged())
+      {
+        g_processor.applyIdentityFromConfig();
+      }
+
       g_processor.pollConnection();
       vTaskDelay(pdMS_TO_TICKS(2));
     }

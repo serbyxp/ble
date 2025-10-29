@@ -5,6 +5,8 @@
 #include <Arduino.h>
 #include <ArduinoJson.h>
 #include <BleCombo.h>
+#include <BLEDevice.h>
+#include <string>
 
 #include <stdlib.h>
 #include <strings.h>
@@ -161,6 +163,9 @@ namespace
   constexpr size_t MAX_CONSUMER_KEYS = 8;
 
   bool lastBleConnectionState = false;
+  bool bleStackActive = false;
+  std::string defaultBleManufacturer;
+  bool defaultManufacturerCaptured = false;
 
   void broadcastJson(const String &message)
   {
@@ -1055,16 +1060,17 @@ namespace
 
 void BleCommandProcessor::begin()
 {
-  const String bleName = getEffectiveBleDeviceName();
-  Keyboard.deviceName = bleName.c_str();
-
-  const DeviceConfig &config = getDeviceConfig();
-  if (config.hasBleManufacturerName && config.bleManufacturerName.length() > 0)
+  if (!defaultManufacturerCaptured)
   {
-    Keyboard.deviceManufacturer = config.bleManufacturerName.c_str();
+    defaultBleManufacturer = Keyboard.deviceManufacturer;
+    defaultManufacturerCaptured = true;
   }
+
+  applyIdentityFromConfig();
+
   Keyboard.begin();
   Mouse.begin();
+  bleStackActive = true;
   lastBleConnectionState = Keyboard.isConnected();
 }
 
@@ -1097,4 +1103,74 @@ void BleCommandProcessor::pollConnection()
 void BleCommandProcessor::sendReadyEvent() const
 {
   sendEvent("ready");
+}
+
+void BleCommandProcessor::applyIdentityFromConfig()
+{
+  const DeviceConfig &config = getDeviceConfig();
+  const String effectiveName = getEffectiveBleDeviceName();
+  std::string desiredName(effectiveName.c_str());
+
+  std::string desiredManufacturer;
+  if (config.hasBleManufacturerName && config.bleManufacturerName.length() > 0)
+  {
+    desiredManufacturer.assign(config.bleManufacturerName.c_str());
+  }
+  else if (defaultManufacturerCaptured)
+  {
+    desiredManufacturer = defaultBleManufacturer;
+  }
+  else
+  {
+    desiredManufacturer.assign(Keyboard.deviceManufacturer);
+  }
+
+  if (!bleStackActive)
+  {
+    Keyboard.deviceName = desiredName;
+    Keyboard.deviceManufacturer = desiredManufacturer;
+    return;
+  }
+
+  bool nameChanged = Keyboard.deviceName != desiredName;
+  bool manufacturerChanged = Keyboard.deviceManufacturer != desiredManufacturer;
+
+  if (!nameChanged && !manufacturerChanged)
+  {
+    return;
+  }
+
+  bool wasConnected = Keyboard.isConnected();
+
+  Keyboard.end();
+  delay(10);
+  BLEDevice::deinit(true);
+  delay(10);
+
+  Keyboard.deviceName = desiredName;
+  Keyboard.deviceManufacturer = desiredManufacturer;
+
+  if (wasConnected)
+  {
+    lastBleConnectionState = false;
+    sendEvent("ble_disconnected");
+  }
+
+  Keyboard.begin();
+  Mouse.begin();
+  delay(10);
+
+  bool connected = Keyboard.isConnected();
+  if (connected != lastBleConnectionState)
+  {
+    lastBleConnectionState = connected;
+    if (connected)
+    {
+      sendEvent("ble_connected");
+    }
+  }
+  else
+  {
+    lastBleConnectionState = connected;
+  }
 }

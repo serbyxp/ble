@@ -85,6 +85,16 @@ void notifyUartConfigChanged();
 bool consumeUartConfigChanged();
 
 /**
+ * @brief Notify listeners that BLE identity values have changed.
+ */
+void notifyBleIdentityChanged();
+
+/**
+ * @brief Consume any pending BLE identity change notification.
+ */
+bool consumeBleIdentityChanged();
+
+/**
  * @brief Determine the BLE device name that should be advertised.
  *
  * Returns the configured override when present, otherwise falls back to the
