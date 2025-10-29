@@ -278,7 +278,9 @@
           }
           const data = await response.json();
           desiredTransport = data.transport === "uart" ? "uart" : "websocket";
-          desiredBaud = Number.parseInt(data.baud, 10) || 115200;
+          const baudFromConfig =
+            Number.parseInt(data.uartBaud ?? data.baud, 10) || 115200;
+          desiredBaud = baudFromConfig;
 
           transportRadios.forEach((radio) => {
             radio.checked = radio.value === desiredTransport;
@@ -328,7 +330,7 @@
 
           const payload = {
             transport: selectedTransport,
-            baud: sanitizedBaud,
+            uartBaud: sanitizedBaud,
           };
 
           const response = await fetch("/api/config", {
