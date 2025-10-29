@@ -5,8 +5,6 @@
 #include <BleCombo.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/portmacro.h>
-#include <memory>
-#include <new>
 
 namespace
 {
@@ -22,10 +20,6 @@ namespace
   const char *const KEY_BLE_NAME = "bleName";
   const char *const KEY_BLE_MANUFACTURER = "bleManuf";
 
-  constexpr size_t MAX_STORED_STRING_LENGTH = 256;
-
-  bool writePreferenceString(Preferences &prefs, const char *key, const String &value, size_t maxLength = 0);
-
   String readPreferenceString(Preferences &prefs, const char *key, size_t maxLength = 0)
   {
     if (!prefs.isKey(key))
@@ -33,102 +27,15 @@ namespace
       return String();
     }
 
-    size_t allowedLength = (maxLength > 0) ? maxLength : MAX_STORED_STRING_LENGTH;
-
-    auto rewriteStoredValue = [&](const String &newValue) {
-      Preferences migrator;
-      if (!migrator.begin(NAMESPACE, false))
-      {
-        return;
-      }
-
-      if (newValue.length() == 0)
-      {
-        migrator.remove(key);
-      }
-      else
-      {
-        writePreferenceString(migrator, key, newValue, maxLength);
-      }
-      migrator.end();
-    };
-
-    auto sanitizeValue = [&](String &value, bool &needsRewrite) {
-      if (allowedLength > 0 && value.length() > allowedLength)
-      {
-        value.remove(allowedLength);
-        needsRewrite = true;
-      }
-    };
-
-    uint8_t prefType = prefs.getType(key);
-    if (prefType == PT_STR)
+    String value = prefs.getString(key, "");
+    if (maxLength > 0 && value.length() > maxLength)
     {
-      String value = prefs.getString(key, "");
-      bool needsRewrite = false;
-      sanitizeValue(value, needsRewrite);
-      if (needsRewrite)
-      {
-        rewriteStoredValue(value);
-      }
-      return value;
+      value.remove(maxLength);
     }
-
-    if (prefType != PT_BLOB)
-    {
-      return String();
-    }
-
-    size_t storedLength = prefs.getBytesLength(key);
-    if (storedLength == 0)
-    {
-      rewriteStoredValue(String());
-      return String();
-    }
-
-    size_t bufferSize = storedLength + 1;
-    std::unique_ptr<char[]> buffer(new (std::nothrow) char[bufferSize]);
-    if (!buffer)
-    {
-      return String();
-    }
-
-    size_t read = prefs.getBytes(key, buffer.get(), storedLength);
-    if (read == 0)
-    {
-      rewriteStoredValue(String());
-      return String();
-    }
-
-    if (read >= bufferSize)
-    {
-      read = bufferSize - 1;
-    }
-    buffer[read] = '\0';
-
-    String value(buffer.get());
-    bool needsRewrite = true;
-
-    if (read < storedLength)
-    {
-      needsRewrite = true;
-    }
-    else if (storedLength > 0 && buffer[storedLength - 1] != '\0')
-    {
-      needsRewrite = true;
-    }
-
-    sanitizeValue(value, needsRewrite);
-
-    if (needsRewrite)
-    {
-      rewriteStoredValue(value);
-    }
-
     return value;
   }
 
-  bool writePreferenceString(Preferences &prefs, const char *key, const String &value, size_t maxLength)
+  bool writePreferenceString(Preferences &prefs, const char *key, const String &value, size_t maxLength = 0)
   {
     if (maxLength > 0 && value.length() > maxLength)
     {
