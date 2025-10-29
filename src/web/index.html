@@ -54,6 +54,16 @@
         font-size: 0.95rem;
       }
 
+      input[type="text"],
+      input[type="password"] {
+        width: 100%;
+        padding: 0.5rem 0.75rem;
+        border-radius: 10px;
+        border: 1px solid rgba(148, 163, 184, 0.3);
+        background: rgba(15, 23, 42, 0.7);
+        color: inherit;
+      }
+
       button {
         padding: 0.75rem 1.5rem;
         background: linear-gradient(135deg, #38bdf8, #6366f1);
@@ -68,6 +78,18 @@
       button:hover {
         transform: translateY(-1px);
         box-shadow: 0 10px 30px rgba(56, 189, 248, 0.3);
+      }
+
+      .button-secondary {
+        background: transparent;
+        color: #f8fafc;
+        border: 1px solid rgba(148, 163, 184, 0.6);
+      }
+
+      .button-secondary:hover {
+        background: rgba(148, 163, 184, 0.12);
+        transform: none;
+        box-shadow: none;
       }
 
       #status {
@@ -129,6 +151,28 @@
         </div>
       </section>
       <section>
+        <h2>Wi-Fi Network</h2>
+        <p id="wifi-status-text">Loading Wi-Fi status…</p>
+        <div style="display: grid; gap: 1rem; max-width: 420px;">
+          <label style="display: flex; flex-direction: column; gap: 0.5rem;">
+            <span style="font-weight: 600;">SSID</span>
+            <input type="text" id="wifi-ssid" placeholder="Network name" />
+          </label>
+          <label style="display: flex; flex-direction: column; gap: 0.5rem;">
+            <span style="font-weight: 600;">Password</span>
+            <input
+              type="password"
+              id="wifi-password"
+              placeholder="Leave blank for open network"
+            />
+          </label>
+          <div style="display: flex; gap: 1rem; flex-wrap: wrap;">
+            <button id="save-wifi">Save Wi-Fi</button>
+            <button id="forget-wifi" class="button-secondary">Forget Wi-Fi</button>
+          </div>
+        </div>
+      </section>
+      <section>
         <h2>Command</h2>
         <p>
           Write a JSON command (for example,
@@ -156,6 +200,11 @@
       const transportRadios = document.querySelectorAll('input[name="transport"]');
       const baudInput = document.getElementById("baud");
       const saveSettingsBtn = document.getElementById("save-settings");
+      const wifiStatusText = document.getElementById("wifi-status-text");
+      const wifiSsidInput = document.getElementById("wifi-ssid");
+      const wifiPasswordInput = document.getElementById("wifi-password");
+      const saveWifiBtn = document.getElementById("save-wifi");
+      const forgetWifiBtn = document.getElementById("forget-wifi");
 
       const wsProtocol = location.protocol === "https:" ? "wss" : "ws";
       const wsPort = 81;
@@ -242,6 +291,57 @@
             "system"
           );
           activateUartMode();
+        }
+      }
+
+      function updateWifiStatusView(data) {
+        if (!data) {
+          wifiStatusText.textContent = "Wi-Fi status unavailable.";
+          forgetWifiBtn.disabled = true;
+          return;
+        }
+
+        const parts = [];
+        const ssid = typeof data.ssid === "string" ? data.ssid : "";
+        if (data.connected) {
+          const ip = data.localIp || "no IP";
+          parts.push(`Connected to ${ssid || "saved network"} (${ip}).`);
+        } else if (data.hasCredentials) {
+          parts.push(`Not connected. Stored network: ${ssid || "unknown"}.`);
+        } else {
+          parts.push("Not connected. No saved Wi-Fi credentials.");
+        }
+
+        if (data.accessPointActive) {
+          const apIp = data.accessPointIp || "192.168.4.1";
+          const apSsid = data.accessPointSsid || "device";
+          parts.push(`Device access point \"${apSsid}\" available at ${apIp}.`);
+        } else {
+          parts.push("Device access point is disabled.");
+        }
+
+        wifiStatusText.textContent = parts.join(" ");
+        if (ssid) {
+          wifiSsidInput.value = ssid;
+        }
+        if (!data.hasCredentials && !ssid) {
+          wifiSsidInput.value = "";
+        }
+        wifiPasswordInput.value = "";
+        forgetWifiBtn.disabled = !data.hasCredentials;
+      }
+
+      async function fetchWifiStatus() {
+        try {
+          const response = await fetch("/api/wifi");
+          if (!response.ok) {
+            throw new Error(`HTTP ${response.status}`);
+          }
+          const data = await response.json();
+          updateWifiStatusView(data);
+        } catch (error) {
+          wifiStatusText.textContent = `Failed to load Wi-Fi status: ${error.message}`;
+          forgetWifiBtn.disabled = true;
         }
       }
 
@@ -353,7 +453,68 @@
         }
       });
 
+      saveWifiBtn.addEventListener("click", async () => {
+        const ssid = wifiSsidInput.value.trim();
+        const password = wifiPasswordInput.value;
+
+        if (!ssid) {
+          appendLog("Please enter an SSID before saving Wi-Fi settings.", "error");
+          return;
+        }
+
+        try {
+          const response = await fetch("/api/wifi", {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify({ ssid, password }),
+          });
+
+          const data = await response.json().catch(() => null);
+          if (!response.ok || !data) {
+            const message = data && data.message ? data.message : `HTTP ${response.status}`;
+            throw new Error(message);
+          }
+
+          updateWifiStatusView(data);
+          appendLog(`Saved Wi-Fi configuration for ${ssid}.`, "system");
+        } catch (error) {
+          appendLog(`Failed to save Wi-Fi settings: ${error.message}`, "error");
+        } finally {
+          wifiPasswordInput.value = "";
+        }
+      });
+
+      forgetWifiBtn.addEventListener("click", async () => {
+        try {
+          const response = await fetch("/api/wifi", {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify({ forget: true }),
+          });
+
+          const data = await response.json().catch(() => null);
+          if (!response.ok || !data) {
+            const message = data && data.message ? data.message : `HTTP ${response.status}`;
+            throw new Error(message);
+          }
+
+          updateWifiStatusView(data);
+          wifiSsidInput.value = "";
+          appendLog("Cleared stored Wi-Fi credentials.", "system");
+        } catch (error) {
+          appendLog(`Failed to clear Wi-Fi credentials: ${error.message}`, "error");
+        } finally {
+          wifiPasswordInput.value = "";
+        }
+      });
+
       loadConfig();
+      fetchWifiStatus();
+      setInterval(fetchWifiStatus, 10000);
     </script>
   </body>
 
