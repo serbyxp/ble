@@ -6,6 +6,7 @@
 #include <ArduinoJson.h>
 #include <WebServer.h>
 #include <WebSocketsServer.h>
+#include <WiFi.h>
 #include <cstring>
 
 #include "web/index.html"
@@ -94,8 +95,19 @@ namespace
       return;
     }
 
+    IPAddress redirectIp = status.accessPointIp;
+
+    WiFiClient client = g_httpServer.client();
+    IPAddress localIp = client.localIP();
+    if (localIp != IPAddress(0, 0, 0, 0))
+    {
+      redirectIp = localIp;
+    }
+
+    String location = String(F("http://")) + redirectIp.toString() + F("/");
+
     g_httpServer.sendHeader(F("Cache-Control"), F("no-cache, no-store, must-revalidate"));
-    g_httpServer.sendHeader(F("Location"), F("/"));
+    g_httpServer.sendHeader(F("Location"), location);
     g_httpServer.send(302, F("text/plain"), F("Redirecting to captive portal"));
   }
 
