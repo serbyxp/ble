@@ -80,6 +80,18 @@ namespace
     Serial.println(F("[WiFi] Access point stopped"));
   }
 
+  void beginSavedStation()
+  {
+    if (g_savedPassword.isEmpty())
+    {
+      WiFi.begin(g_savedSsid.c_str());
+    }
+    else
+    {
+      WiFi.begin(g_savedSsid.c_str(), g_savedPassword.c_str());
+    }
+  }
+
   void beginStationConnection()
   {
     if (!g_hasCredentials)
@@ -91,7 +103,7 @@ namespace
     startAccessPoint();
 
     Serial.printf("[WiFi] Connecting to '%s'\n", g_savedSsid.c_str());
-    WiFi.begin(g_savedSsid.c_str(), g_savedPassword.c_str());
+    beginSavedStation();
     g_connectStart = millis();
     g_state = WifiState::Connecting;
   }
@@ -107,7 +119,7 @@ namespace
       startAccessPoint();
       g_state = WifiState::Connecting;
       g_connectStart = millis();
-      WiFi.begin(g_savedSsid.c_str(), g_savedPassword.c_str());
+      beginSavedStation();
       return;
     }
 
