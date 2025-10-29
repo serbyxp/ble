@@ -90,19 +90,20 @@ bool loadDeviceConfig()
   if (!g_preferences.begin(NAMESPACE, true))
   {
     nvs_handle_t handle = 0;
-    esp_err_t err = nvs_open(NAMESPACE, NVS_READONLY, &handle);
-    if (err == ESP_OK)
+    esp_err_t readOnlyStatus = nvs_open(NAMESPACE, NVS_READONLY, &handle);
+    if (readOnlyStatus == ESP_OK)
     {
       nvs_close(handle);
       return false;
     }
-    if (err != ESP_ERR_NVS_NOT_FOUND)
+    if (readOnlyStatus != ESP_ERR_NVS_NOT_FOUND)
     {
       return false;
     }
 
-    err = nvs_open(NAMESPACE, NVS_READWRITE, &handle);
-    if (err != ESP_OK)
+    handle = 0;
+    esp_err_t initStatus = nvs_open(NAMESPACE, NVS_READWRITE, &handle);
+    if (initStatus != ESP_OK)
     {
       return false;
     }
