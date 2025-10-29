@@ -120,7 +120,22 @@ namespace
     g_staConnected = false;
     Serial.printf("[WS] Connecting to WiFi SSID: %s\n", config.wifi.ssid.c_str());
 
-    wl_status_t waitResult = WiFi.waitForConnectResult(WIFI_AP_START_DELAY_MS);
+    wl_status_t waitResult = WL_IDLE_STATUS;
+    unsigned long connectStart = millis();
+    while (millis() - connectStart < WIFI_AP_START_DELAY_MS)
+    {
+      waitResult = static_cast<wl_status_t>(WiFi.status());
+      if (waitResult == WL_CONNECTED || waitResult == WL_CONNECT_FAILED || waitResult == WL_NO_SSID_AVAIL)
+      {
+        break;
+      }
+      delay(100);
+    }
+
+    if (waitResult != WL_CONNECTED)
+    {
+      waitResult = static_cast<wl_status_t>(WiFi.status());
+    }
     if (waitResult != WL_CONNECTED)
     {
       Serial.printf("[WS] WiFi connection failed (status=%d)\n", static_cast<int>(waitResult));
