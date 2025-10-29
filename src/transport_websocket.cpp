@@ -234,7 +234,13 @@ namespace
   void handleWifiScanGet()
   {
     std::vector<WifiScanResult> networks = wifiManagerScanNetworks();
-    size_t capacity = JSON_OBJECT_SIZE(3) + JSON_ARRAY_SIZE(networks.size()) + networks.size() * JSON_OBJECT_SIZE(4) + 64;
+    size_t capacity = JSON_OBJECT_SIZE(3) + JSON_ARRAY_SIZE(networks.size()) + JSON_STRING_SIZE(2);
+    for (const WifiScanResult &network : networks)
+    {
+      capacity += JSON_OBJECT_SIZE(4);
+      capacity += JSON_STRING_SIZE(network.ssid.length());
+    }
+    capacity += 32;
     DynamicJsonDocument doc(capacity);
     doc["status"] = "ok";
     doc["count"] = static_cast<uint32_t>(networks.size());
