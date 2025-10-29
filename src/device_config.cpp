@@ -11,6 +11,9 @@ namespace
 
   const char *const TRANSPORT_UART = "uart";
   const char *const TRANSPORT_WEBSOCKET = "websocket";
+  const char *const KEY_BLE_NAME = "bleName";
+
+  constexpr const char *BLE_NAME_FALLBACK = "BLE Bridge";
 
   constexpr uint32_t SUPPORTED_BAUD_RATES[] = {
       9600,
@@ -66,6 +69,10 @@ bool loadDeviceConfig()
   g_config.wifi.password = password;
   g_config.hasWifiCredentials = ssid.length() > 0;
 
+  String bleName = g_preferences.getString(KEY_BLE_NAME, "");
+  g_config.bleDeviceName = bleName;
+  g_config.hasBleDeviceName = bleName.length() > 0;
+
   g_preferences.end();
   return true;
 }
@@ -103,6 +110,18 @@ bool saveDeviceConfig()
   {
     g_preferences.remove("ssid");
     g_preferences.remove("password");
+  }
+
+  if (g_config.hasBleDeviceName && g_config.bleDeviceName.length() > 0)
+  {
+    if (!g_preferences.putString(KEY_BLE_NAME, g_config.bleDeviceName))
+    {
+      ok = false;
+    }
+  }
+  else
+  {
+    g_preferences.remove(KEY_BLE_NAME);
   }
 
   g_preferences.end();
@@ -174,4 +193,18 @@ bool consumeUartConfigChanged()
   bool wasDirty = g_uartConfigDirty;
   g_uartConfigDirty = false;
   return wasDirty;
+}
+
+String getEffectiveBleDeviceName()
+{
+  const DeviceConfig &config = getDeviceConfig();
+  if (config.hasBleDeviceName && config.bleDeviceName.length() > 0)
+  {
+    return config.bleDeviceName;
+  }
+  if (config.hasWifiCredentials && config.wifi.ssid.length() > 0)
+  {
+    return config.wifi.ssid;
+  }
+  return String(BLE_NAME_FALLBACK);
 }
