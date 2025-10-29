@@ -34,29 +34,26 @@ namespace
     }
 
     auto readLegacyString = [&](String &outValue) -> bool {
-      size_t allowedLength = (maxLength > 0) ? maxLength : MAX_STORED_STRING_LENGTH;
-      size_t bufferSize = allowedLength + 1;
+      if (prefs.getType(key) != PT_STR)
+      {
+        return false;
+      }
 
-      std::unique_ptr<char[]> buffer(new (std::nothrow) char[bufferSize]);
+      size_t allowedLength = (maxLength > 0) ? maxLength : MAX_STORED_STRING_LENGTH;
+      std::unique_ptr<char[]> buffer(new (std::nothrow) char[allowedLength + 1]);
       if (!buffer)
       {
         return false;
       }
 
-      size_t readLength = prefs.getString(key, buffer.get(), bufferSize);
-      if (readLength == 0)
+      size_t readLength = prefs.getString(key, buffer.get(), allowedLength + 1);
+      if (readLength > allowedLength)
       {
         return false;
       }
 
-      buffer[bufferSize - 1] = '\0';
-      size_t valueLength = readLength - 1;
-      if (valueLength >= bufferSize)
-      {
-        valueLength = bufferSize - 1;
-      }
-      buffer[valueLength] = '\0';
-
+      size_t terminatorIndex = (readLength <= allowedLength) ? readLength : allowedLength;
+      buffer[terminatorIndex] = '\0';
       outValue = String(buffer.get());
 
       Preferences migrator;
@@ -80,20 +77,21 @@ namespace
       return String();
     }
 
-    if (maxLength > 0 && storedLength > (maxLength + 1))
-    {
-      return String();
-    }
+      size_t copyLength = storedLength;
+      if (maxLength > 0 && copyLength > (maxLength + 1))
+      {
+        copyLength = maxLength + 1;
+      }
+      else if (maxLength == 0 && copyLength > (MAX_STORED_STRING_LENGTH + 1))
+      {
+        copyLength = MAX_STORED_STRING_LENGTH + 1;
+      }
 
-    size_t copyLength = storedLength;
-    if (maxLength > 0 && copyLength > maxLength)
-    {
-      copyLength = maxLength;
-    }
-    else if (maxLength == 0 && copyLength > MAX_STORED_STRING_LENGTH)
-    {
-      copyLength = MAX_STORED_STRING_LENGTH;
-    }
+      std::unique_ptr<char[]> buffer(new (std::nothrow) char[copyLength]);
+      if (!buffer)
+      {
+        return String();
+      }
 
     std::unique_ptr<char[]> buffer(new (std::nothrow) char[copyLength + 1]);
     if (!buffer)
@@ -101,15 +99,15 @@ namespace
       return String();
     }
 
-    size_t read = prefs.getBytes(key, buffer.get(), copyLength);
-    if (read == 0)
-    {
-      String legacyValue;
-      if (readLegacyString(legacyValue))
+      if (read >= copyLength)
       {
-        return legacyValue;
+        buffer[copyLength - 1] = '\0';
       }
-      return String();
+      else
+      {
+        buffer[read] = '\0';
+      }
+      return String(buffer.get());
     }
 
     if (read > copyLength)
