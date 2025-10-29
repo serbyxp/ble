@@ -98,7 +98,7 @@ private:
   static void taskServer(void *pvParameter);
 
 public:
-  BleComboKeyboard(std::string deviceName = "BlynkGO Keyboard/Mouse", std::string deviceManufacturer = "BlynkGO Solution", uint8_t batteryLevel = 100);
+  BleComboKeyboard(std::string deviceName = "uHID", std::string deviceManufacturer = "uHID Solution", uint8_t batteryLevel = 100);
   void begin(void);
   void end(void);
   void sendReport(KeyReport *keys);
