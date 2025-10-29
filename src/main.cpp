@@ -64,16 +64,32 @@ namespace
 
 void setup()
 {
+  Serial.begin(115200);
+  Serial.println(F("[APP] Booting BLE bridge firmware"));
+
   bool configLoaded = loadDeviceConfig();
+
+  if (!configLoaded)
+  {
+    Serial.println(F("[APP] Failed to load stored configuration; defaults will be used"));
+  }
+  else
+  {
+    const DeviceConfig &config = getDeviceConfig();
+    Serial.printf("[APP] Loaded config: transport=%s, uart=%lu, hasWifi=%s\n",
+                  transportTypeToString(config.transport),
+                  static_cast<unsigned long>(config.uartBaudRate),
+                  config.hasWifiCredentials ? "true" : "false");
+    if (config.hasWifiCredentials)
+    {
+      Serial.printf("[APP] Stored WiFi SSID: %s\n", config.wifi.ssid.c_str());
+    }
+  }
 
   g_commandQueue = xQueueCreate(COMMAND_QUEUE_LENGTH, sizeof(CommandMessage));
 
   uartTransportBegin(g_commandQueue);
 
-  if (!configLoaded)
-  {
-    Serial.println(F("{\"status\":\"warning\",\"message\":\"Using default configuration\"}"));
-  }
   if (!g_commandQueue)
   {
     Serial.println(F("{\"status\":\"error\",\"message\":\"Failed to create command queue\"}"));
@@ -85,6 +101,8 @@ void setup()
 
   xTaskCreatePinnedToCore(transportTask, "transport", 4096, nullptr, 1, nullptr, 1);
   xTaskCreatePinnedToCore(bleTask, "ble", 6144, nullptr, 1, nullptr, 0);
+
+  Serial.println(F("[APP] Setup complete, tasks started"));
 }
 
 void loop()

@@ -63,6 +63,7 @@ namespace
   {
     if (g_apActive)
     {
+      Serial.println(F("[WS] Access Point already active; skipping start"));
       return;
     }
 
@@ -71,13 +72,24 @@ namespace
       g_apSsid = generateApSsid();
     }
 
-    WiFi.mode(WIFI_AP_STA);
-    WiFi.softAP(g_apSsid.c_str(), AP_PASSWORD);
+    if (!WiFi.mode(WIFI_AP_STA))
+    {
+      Serial.println(F("[WS] Failed to set WiFi mode to AP+STA"));
+    }
+    bool apStarted = WiFi.softAP(g_apSsid.c_str(), AP_PASSWORD);
+    if (!apStarted)
+    {
+      Serial.println(F("[WS] softAP() returned false; AP may not have started"));
+    }
     g_apIp = WiFi.softAPIP();
 
     if (g_dnsServer.start(DNS_PORT, "*", g_apIp))
     {
       g_dnsActive = true;
+    }
+    else
+    {
+      Serial.println(F("[WS] Failed to start captive DNS server"));
     }
 
     g_apActive = true;
@@ -89,6 +101,7 @@ namespace
   {
     if (!g_apActive)
     {
+      Serial.println(F("[WS] Access Point already stopped"));
       return;
     }
 
@@ -108,6 +121,7 @@ namespace
     const DeviceConfig &config = getDeviceConfig();
     if (!config.hasWifiCredentials || config.wifi.ssid.isEmpty())
     {
+      Serial.println(F("[WS] No stored WiFi credentials; skipping STA connection"));
       return;
     }
 
@@ -434,6 +448,7 @@ void websocketTransportBegin(QueueHandle_t queue)
   g_queue = queue;
 
   WiFi.persistent(false);
+  Serial.println(F("[WS] Initializing websocket transport"));
   startAccessPoint();
   connectToConfiguredNetwork();
 
@@ -451,6 +466,7 @@ void websocketTransportBegin(QueueHandle_t queue)
   g_httpServer.on("/success.txt", HTTP_GET, handleCaptivePortal);
   g_httpServer.onNotFound(handleNotFound);
   g_httpServer.begin();
+  Serial.println(F("[WS] HTTP and WebSocket servers started"));
 }
 
 void websocketTransportLoop()
@@ -475,6 +491,7 @@ void websocketTransportLoop()
     {
       stopAccessPoint();
       WiFi.mode(WIFI_STA);
+      Serial.println(F("[WS] STA connection established; AP disabled"));
     }
   }
   else
@@ -488,10 +505,12 @@ void websocketTransportLoop()
     const DeviceConfig &config = getDeviceConfig();
     if (config.hasWifiCredentials && (millis() - g_lastConnectionAttempt) > WIFI_RETRY_INTERVAL_MS)
     {
+      Serial.println(F("[WS] Retrying STA connection"));
       connectToConfiguredNetwork();
     }
     if (!g_apActive)
     {
+      Serial.println(F("[WS] STA not connected; ensuring AP is running"));
       startAccessPoint();
     }
   }
