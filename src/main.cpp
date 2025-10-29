@@ -6,7 +6,7 @@
 #include "ble_command_processor.h"
 #include "command_message.h"
 #include "device_config.h"
-#include "transports/transport_websocket.h"
+#include "transport_websocket.h"
 
 namespace
 {

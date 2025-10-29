@@ -4,24 +4,24 @@
 
 namespace
 {
-constexpr const char *NAMESPACE = "device";
-Preferences g_preferences;
-DeviceConfig g_config;
+  constexpr const char *NAMESPACE = "device";
+  Preferences g_preferences;
+  DeviceConfig g_config;
 
-const char *const TRANSPORT_UART = "uart";
-const char *const TRANSPORT_WEBSOCKET = "websocket";
+  const char *const TRANSPORT_UART = "uart";
+  const char *const TRANSPORT_WEBSOCKET = "websocket";
 
-TransportType sanitizeTransport(uint8_t value)
-{
-  switch (static_cast<TransportType>(value))
+  TransportType sanitizeTransport(uint8_t value)
   {
-  case TransportType::Uart:
-    return TransportType::Uart;
-  case TransportType::Websocket:
+    switch (static_cast<TransportType>(value))
+    {
+    case TransportType::Uart:
+      return TransportType::Uart;
+    case TransportType::Websocket:
+      return TransportType::Websocket;
+    }
     return TransportType::Websocket;
   }
-  return TransportType::Websocket;
-}
 
 } // namespace
 

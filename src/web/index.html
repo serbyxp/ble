@@ -2,9 +2,10 @@
 
 #include <pgmspace.h>
 
-const char INDEX_HTML[] PROGMEM = R"rawliteral(
-<!DOCTYPE html>
-<html lang="en">
+  const char INDEX_HTML[] PROGMEM = R"rawliteral(
+  <!DOCTYPE html>
+  <html lang="en">
+
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
@@ -13,6 +14,7 @@ const char INDEX_HTML[] PROGMEM = R"rawliteral(
       :root {
         color-scheme: dark;
       }
+
       body {
         font-family: "Inter", "Segoe UI", -apple-system, BlinkMacSystemFont, sans-serif;
         margin: 0;
@@ -22,6 +24,7 @@ const char INDEX_HTML[] PROGMEM = R"rawliteral(
         display: flex;
         flex-direction: column;
       }
+
       header {
         padding: 1.75rem 1.5rem;
         text-align: center;
@@ -29,29 +32,35 @@ const char INDEX_HTML[] PROGMEM = R"rawliteral(
         backdrop-filter: blur(8px);
         border-bottom: 1px solid rgba(148, 163, 184, 0.2);
       }
+
       header h1 {
         margin: 0 0 0.5rem;
         font-size: 1.75rem;
       }
+
       header p {
         margin: 0.25rem 0;
       }
+
       .status-grid {
         margin-top: 1rem;
         display: grid;
         gap: 0.75rem;
       }
+
       @media (min-width: 640px) {
         .status-grid {
           grid-template-columns: repeat(3, minmax(0, 1fr));
         }
       }
+
       main {
         flex: 1;
         padding: 1.5rem;
         display: grid;
         gap: 1.5rem;
       }
+
       section {
         background: rgba(15, 23, 42, 0.88);
         border-radius: 16px;
@@ -59,10 +68,12 @@ const char INDEX_HTML[] PROGMEM = R"rawliteral(
         box-shadow: 0 20px 45px rgba(15, 23, 42, 0.35);
         border: 1px solid rgba(148, 163, 184, 0.15);
       }
+
       h2 {
         margin-top: 0;
         font-size: 1.25rem;
       }
+
       .option {
         display: flex;
         align-items: center;
@@ -74,21 +85,26 @@ const char INDEX_HTML[] PROGMEM = R"rawliteral(
         border: 1px solid transparent;
         transition: border-color 0.2s ease;
       }
+
       .option:hover {
         border-color: rgba(94, 234, 212, 0.4);
       }
+
       .hint {
         font-size: 0.85rem;
         color: rgba(226, 232, 240, 0.7);
       }
+
       label span {
         font-weight: 600;
       }
+
       form label {
         display: block;
         margin-bottom: 0.75rem;
         font-weight: 600;
       }
+
       input[type="text"],
       input[type="password"],
       textarea {
@@ -101,11 +117,13 @@ const char INDEX_HTML[] PROGMEM = R"rawliteral(
         font-size: 0.95rem;
         box-sizing: border-box;
       }
+
       textarea {
         min-height: 160px;
         resize: vertical;
         font-family: "Fira Code", monospace;
       }
+
       button {
         padding: 0.75rem 1.5rem;
         background: linear-gradient(135deg, #38bdf8, #6366f1);
@@ -116,16 +134,19 @@ const char INDEX_HTML[] PROGMEM = R"rawliteral(
         cursor: pointer;
         transition: transform 0.2s ease, box-shadow 0.2s ease;
       }
+
       button:hover {
         transform: translateY(-1px);
         box-shadow: 0 12px 30px rgba(56, 189, 248, 0.35);
       }
+
       .actions {
         display: flex;
         flex-wrap: wrap;
         gap: 0.75rem;
         margin-top: 1rem;
       }
+
       #log {
         max-height: 240px;
         overflow-y: auto;
@@ -135,28 +156,35 @@ const char INDEX_HTML[] PROGMEM = R"rawliteral(
         border-radius: 12px;
         border: 1px solid rgba(94, 234, 212, 0.2);
       }
+
       .log-entry {
         margin-bottom: 0.5rem;
         word-break: break-word;
       }
+
       .log-entry[data-type="error"] {
         color: #fda4af;
       }
+
       .log-entry[data-type="sent"] {
         color: #a5b4fc;
       }
+
       .log-entry[data-type="device"] {
         color: #5eead4;
       }
+
       .scan-results {
         margin-top: 1.25rem;
         border-top: 1px solid rgba(148, 163, 184, 0.25);
         padding-top: 1rem;
         display: none;
       }
+
       .scan-results.visible {
         display: block;
       }
+
       .scan-results ul {
         list-style: none;
         margin: 0;
@@ -164,6 +192,7 @@ const char INDEX_HTML[] PROGMEM = R"rawliteral(
         display: grid;
         gap: 0.5rem;
       }
+
       .scan-results button {
         width: 100%;
         justify-content: space-between;
@@ -174,17 +203,21 @@ const char INDEX_HTML[] PROGMEM = R"rawliteral(
         color: inherit;
         padding: 0.6rem 0.9rem;
       }
+
       .scan-results button span {
         font-weight: 600;
       }
+
       .scan-results small {
         color: rgba(148, 163, 184, 0.8);
       }
+
       .hidden {
         display: none !important;
       }
     </style>
   </head>
+
   <body>
     <header>
       <h1>BLE Bridge Control</h1>
@@ -241,7 +274,8 @@ const char INDEX_HTML[] PROGMEM = R"rawliteral(
           Example:
           <code>{"device":"keyboard","action":"tap","key":"ENTER"}</code>
         </p>
-        <textarea id="command" placeholder="{\n  &quot;device&quot;: &quot;keyboard&quot;,\n  &quot;action&quot;: &quot;tap&quot;,\n  &quot;key&quot;: &quot;ENTER&quot;\n}"></textarea>
+        <textarea id="command"
+          placeholder="{\n  &quot;device&quot;: &quot;keyboard&quot;,\n  &quot;action&quot;: &quot;tap&quot;,\n  &quot;key&quot;: &quot;ENTER&quot;\n}"></textarea>
         <div class="actions">
           <button id="send" type="button">Send</button>
           <button id="clear" type="button">Clear Log</button>
@@ -519,5 +553,6 @@ const char INDEX_HTML[] PROGMEM = R"rawliteral(
       loadConfig();
     </script>
   </body>
-</html>
-)rawliteral";
+
+  </html>
+  )rawliteral";
