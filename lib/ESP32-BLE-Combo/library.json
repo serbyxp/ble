@@ -1,0 +1,18 @@
+{
+  "name": "ESP32 BLE Combo Keyboard Mouse",
+  "version": "0.1.2",
+  "description": "Bluetooth LE Combo Keyboard Mouse library for the ESP32.",
+  "keywords": ["bluetooth", "ble", "hid", "keyboard", "mouse"],
+  "homepage": "https://github.com/BlynkGO/ESP32-BLE-Combo",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/BlynkGO/ESP32-BLE-Combo.git"
+  },
+  "authors": [
+    { "name": "T-vK" },
+    { "name": "blackketter" },
+    { "name": "BlynkGO" }
+  ],
+  "frameworks": ["arduino"],
+  "platforms": ["espressif32"]
+}
