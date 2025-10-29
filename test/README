@@ -46,3 +46,38 @@ Optional flags let you adjust delays or print the planned sequence without sendi
 ### Browser control panel
 
 Prefer a browser-based UI? Launch the FastAPI app under `web/server.py` (`uvicorn web.server:app --reload`) and open `http://127.0.0.1:8000/`. The page lets you connect to the UART port, send text, trigger combos, media keys, and mouse actions interactively. See `web/README.md` for details.
+
+### Wi-Fi credential migration regression
+
+Use this manual check to ensure legacy Wi-Fi credentials survive migration when `loadDeviceConfig()` rewrites them.
+
+1. Generate an NVS partition with a 64-character WPA key using Espressif's `nvs_partition_gen.py` (bundled with the ESP-IDF and Arduino-ESP32 toolchains). Save the following CSV as `wifi64.csv`:
+
+   ```csv
+   key,type,encoding,value
+   namespace,namespace,,device
+   ssid,data,string,LegacyWifi
+   password,data,string,0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+   ```
+
+   Then create the binary image:
+
+   ```bash
+   python $IDF_PATH/components/nvs_flash/nvs_partition_generator/nvs_partition_gen.py generate wifi64.csv wifi64.bin 0x4000
+   ```
+
+2. Flash the generated partition at the NVS offset from your board's partition table (0x9000 when using `huge_app.csv` on the default `nodemcu-32s` target):
+
+   ```bash
+   esptool.py --port /dev/ttyUSB0 --baud 460800 write_flash 0x9000 wifi64.bin
+   ```
+
+3. Flash the latest firmware and reboot the device:
+
+   ```bash
+   pio run -e nodemcu-32s -t upload
+   ```
+
+4. Monitor the serial log while the device boots. `loadDeviceConfig()` should log the preserved SSID and attempt to join the network with the trimmed 63-character password. Confirm the STA interface comes up (`WiFi connected` or a DHCP lease) and that the credentials remain populated in the WebSocket status payload.
+
+5. If the device fails to associate, the regression succeeded only if the password is still present—double-check the access point accepts the truncated 63-character key.
