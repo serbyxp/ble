@@ -27,6 +27,7 @@ namespace
   constexpr uint16_t HTTP_PORT = 80;
   constexpr uint8_t DNS_PORT = 53;
   constexpr uint32_t WIFI_RETRY_INTERVAL_MS = 10000;
+  constexpr uint32_t WIFI_AP_START_DELAY_MS = 5000;
   constexpr const char *AP_PASSWORD = "uhid1234";
 
   QueueHandle_t g_queue = nullptr;
@@ -100,22 +101,22 @@ namespace
     Serial.println("[WS] Access Point disabled");
   }
 
-  void connectToConfiguredNetwork()
+  bool connectToConfiguredNetwork()
   {
     const DeviceConfig &config = getDeviceConfig();
     if (!config.hasWifiCredentials || config.wifi.ssid.isEmpty())
     {
-      return;
+      return false;
     }
 
-    startAccessPoint();
-    WiFi.mode(WIFI_AP_STA);
+    WiFi.mode(WIFI_STA);
     WiFi.disconnect(false, false);
     WiFi.setAutoReconnect(true);
     WiFi.begin(config.wifi.ssid.c_str(), config.wifi.password.c_str());
     g_lastConnectionAttempt = millis();
     g_staConnected = false;
     Serial.printf("[WS] Connecting to WiFi SSID: %s\n", config.wifi.ssid.c_str());
+    return true;
   }
 
   void handleConfigGet()
@@ -173,11 +174,15 @@ namespace
     {
       if (config.hasWifiCredentials && !config.wifi.ssid.isEmpty())
       {
-        connectToConfiguredNetwork();
+        if (!connectToConfiguredNetwork())
+        {
+          startAccessPoint();
+        }
       }
       else
       {
         WiFi.disconnect(true, true);
+        g_lastConnectionAttempt = 0;
         startAccessPoint();
       }
     }
@@ -517,8 +522,10 @@ void websocketTransportBegin(QueueHandle_t queue)
   g_queue = queue;
 
   WiFi.persistent(false);
-  startAccessPoint();
-  connectToConfiguredNetwork();
+  if (!connectToConfiguredNetwork())
+  {
+    startAccessPoint();
+  }
 
   g_websocket.begin();
   g_websocket.onEvent(handleWebsocketEvent);
@@ -569,13 +576,19 @@ void websocketTransportLoop()
     }
 
     const DeviceConfig &config = getDeviceConfig();
-    if (config.hasWifiCredentials && (millis() - g_lastConnectionAttempt) > WIFI_RETRY_INTERVAL_MS)
+    bool hasCredentials = config.hasWifiCredentials && !config.wifi.ssid.isEmpty();
+    if (hasCredentials && (millis() - g_lastConnectionAttempt) > WIFI_RETRY_INTERVAL_MS)
     {
       connectToConfiguredNetwork();
     }
     if (!g_apActive)
     {
-      startAccessPoint();
+      bool connectionFailed = status == WL_CONNECT_FAILED || status == WL_NO_SSID_AVAIL || status == WL_CONNECTION_LOST;
+      bool connectionTimedOut = g_lastConnectionAttempt != 0 && (millis() - g_lastConnectionAttempt) >= WIFI_AP_START_DELAY_MS;
+      if (!hasCredentials || connectionFailed || connectionTimedOut)
+      {
+        startAccessPoint();
+      }
     }
   }
 }
