@@ -17,7 +17,7 @@ String generateApSsid()
 {
   uint32_t identifier = static_cast<uint32_t>(ESP.getEfuseMac() & 0xFFFFFF);
   char buffer[20];
-  snprintf(buffer, sizeof(buffer), "ble-bridge-%06X", identifier);
+  snprintf(buffer, sizeof(buffer), "hid-%06X", identifier);
   return String(buffer);
 }
 
