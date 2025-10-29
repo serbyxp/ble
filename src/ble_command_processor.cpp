@@ -170,6 +170,36 @@ namespace
   std::string defaultBleManufacturer;
   bool defaultManufacturerCaptured = false;
 
+  void shutdownBleStack()
+  {
+    if (!bleStackActive)
+    {
+      return;
+    }
+
+    bool wasConnected = Keyboard.isConnected();
+
+    Keyboard.releaseAll();
+    Keyboard.end();
+    Mouse.end();
+    vTaskDelay(pdMS_TO_TICKS(10));
+
+    BLEDevice::deinit(true);
+    vTaskDelay(pdMS_TO_TICKS(10));
+
+    bleStackActive = false;
+
+    if (wasConnected)
+    {
+      lastBleConnectionState = false;
+      sendEvent("ble_disconnected");
+    }
+    else
+    {
+      lastBleConnectionState = false;
+    }
+  }
+
   void broadcastJson(const String &message)
   {
     Serial.println(message);
@@ -1073,6 +1103,8 @@ namespace
 
 void BleCommandProcessor::begin()
 {
+  shutdownBleStack();
+
   if (!defaultManufacturerCaptured)
   {
     defaultBleManufacturer = Keyboard.deviceManufacturer;
