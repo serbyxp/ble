@@ -101,12 +101,25 @@ namespace
     g_apSsid = generateApSsid();
 
     WiFi.mode(WIFI_AP_STA);
-    WiFi.softAP(g_apSsid.c_str(), AP_PASSWORD);
+    bool apStarted = WiFi.softAP(g_apSsid.c_str(), AP_PASSWORD);
+    Serial.printf("[WS] WiFi.softAP(%s) returned %s\n", g_apSsid.c_str(), apStarted ? "true" : "false");
+
+    if (!apStarted)
+    {
+      Serial.println("[WS] Failed to start Access Point");
+      return;
+    }
+
     g_apIp = WiFi.softAPIP();
 
     if (g_dnsServer.start(DNS_PORT, "*", g_apIp))
     {
       g_dnsActive = true;
+      Serial.printf("[WS] DNS server started on %s\n", g_apIp.toString().c_str());
+    }
+    else
+    {
+      Serial.println("[WS] Failed to start DNS server");
     }
 
     g_apActive = true;
@@ -125,11 +138,12 @@ namespace
     {
       g_dnsServer.stop();
       g_dnsActive = false;
+      Serial.println("[WS] DNS server stopped");
     }
 
     WiFi.softAPdisconnect(true);
     g_apActive = false;
-    Serial.println("[WS] Access Point disabled");
+    Serial.printf("[WS] Access Point disabled (SSID %s)\n", g_apSsid.c_str());
   }
 
   bool connectToConfiguredNetwork()
@@ -137,6 +151,7 @@ namespace
     const DeviceConfig &config = getDeviceConfig();
     if (!config.hasWifiCredentials || config.wifi.ssid.isEmpty())
     {
+      Serial.println("[WS] Skipping STA connect attempt: missing WiFi credentials");
       return false;
     }
 
@@ -146,10 +161,13 @@ namespace
     WiFi.setAutoReconnect(true);
 
     const char *password = config.wifi.password.length() > 0 ? config.wifi.password.c_str() : nullptr;
+    static uint32_t attemptCounter = 0;
+    ++attemptCounter;
+
     WiFi.begin(config.wifi.ssid.c_str(), password);
     g_lastConnectionAttempt = millis();
     g_staConnected = false;
-    Serial.printf("[WS] Connecting to WiFi SSID: %s\n", config.wifi.ssid.c_str());
+    Serial.printf("[WS] STA connect attempt #%lu to SSID: %s\n", static_cast<unsigned long>(attemptCounter), config.wifi.ssid.c_str());
 
     wl_status_t waitResult = WL_IDLE_STATUS;
     unsigned long connectStart = millis();
@@ -174,7 +192,8 @@ namespace
     {
       waitResult = static_cast<wl_status_t>(WiFi.status());
     }
-    Serial.printf("[WS] WiFi connect wait finished after %lu ms with status %s (%d)\n", millis() - connectStart, wifiStatusToString(waitResult), static_cast<int>(waitResult));
+    unsigned long elapsed = millis() - connectStart;
+    Serial.printf("[WS] STA connect attempt #%lu completed after %lu ms with status %s (%d)\n", static_cast<unsigned long>(attemptCounter), elapsed, wifiStatusToString(waitResult), static_cast<int>(waitResult));
     if (waitResult != WL_CONNECTED)
     {
       Serial.printf("[WS] WiFi connection failed (status=%d)\n", static_cast<int>(waitResult));
@@ -185,6 +204,8 @@ namespace
       }
       return false;
     }
+
+    Serial.printf("[WS] Connected to WiFi SSID %s\n", config.wifi.ssid.c_str());
 
     return true;
   }
@@ -247,6 +268,7 @@ namespace
         bool connected = connectToConfiguredNetwork();
         if (!connected)
         {
+          Serial.println("[WS] Starting Access Point because STA connection attempt failed after configuration change");
           startAccessPoint();
         }
       }
@@ -254,6 +276,7 @@ namespace
       {
         WiFi.disconnect(true, true);
         g_lastConnectionAttempt = 0;
+        Serial.println("[WS] Starting Access Point because WiFi credentials were cleared");
         startAccessPoint();
       }
     }
