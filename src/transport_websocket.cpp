@@ -4,6 +4,7 @@
 
 #include <Arduino.h>
 #include <ArduinoJson.h>
+#include <WiFi.h>
 #include <WebServer.h>
 #include <WebSocketsServer.h>
 #include <cstring>
@@ -94,12 +95,19 @@ namespace
       return;
     }
 
-    static const char RESPONSE[] PROGMEM =
-        "<!DOCTYPE html><html><head><meta charset=\"utf-8\"><meta http-equiv=\"refresh\" content=\"0;url=/\">"
-        "<title>Captive Portal</title></head><body>Redirecting…</body></html>";
+    IPAddress portalIp = status.accessPointIp;
+    if (!portalIp)
+    {
+      portalIp = WiFi.softAPIP();
+    }
 
-    g_httpServer.sendHeader("Cache-Control", "no-cache, no-store, must-revalidate");
-    g_httpServer.send_P(200, "text/html", RESPONSE);
+    String redirectUrl = String(F("http://"));
+    redirectUrl += portalIp.toString();
+    redirectUrl += '/';
+
+    g_httpServer.sendHeader(F("Cache-Control"), F("no-cache, no-store, must-revalidate"));
+    g_httpServer.sendHeader(F("Location"), redirectUrl);
+    g_httpServer.send(302, F("text/plain"), F("Redirecting to captive portal"));
   }
 
   void sendCorsHeaders()
@@ -393,9 +401,13 @@ void websocketTransportBegin(QueueHandle_t queue)
     g_httpServer.on("/api/wifi/scan", HTTP_GET, handleWifiScanGet);
     g_httpServer.on("/api/wifi/scan", HTTP_OPTIONS, handleWifiOptions);
     g_httpServer.on("/generate_204", HTTP_GET, handleCaptivePortalRequest);
+    g_httpServer.on("/generate_204", HTTP_HEAD, handleCaptivePortalRequest);
     g_httpServer.on("/gen_204", HTTP_GET, handleCaptivePortalRequest);
+    g_httpServer.on("/gen_204", HTTP_HEAD, handleCaptivePortalRequest);
     g_httpServer.on("/hotspot-detect.html", HTTP_GET, handleCaptivePortalRequest);
+    g_httpServer.on("/hotspot-detect.html", HTTP_HEAD, handleCaptivePortalRequest);
     g_httpServer.on("/connecttest.txt", HTTP_GET, handleCaptivePortalRequest);
+    g_httpServer.on("/connecttest.txt", HTTP_HEAD, handleCaptivePortalRequest);
     g_httpServer.onNotFound(handleNotFound);
     g_handlersRegistered = true;
   }
