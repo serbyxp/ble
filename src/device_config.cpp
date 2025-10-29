@@ -112,6 +112,7 @@ namespace
     {
       buffer[read] = '\0';
     }
+    buffer[read] = '\0';
     return String(buffer.get());
   }
 
