@@ -143,7 +143,11 @@ BleComboKeyboard::BleComboKeyboard(std::string deviceName, std::string deviceMan
 
 void BleComboKeyboard::begin(void)
 {
-  xTaskCreate(this->taskServer, "server", 20000, (void *)this, 5, NULL);
+        if (serverTaskHandle != nullptr)
+        {
+                return;
+        }
+        xTaskCreate(this->taskServer, "server", 20000, (void *)this, 5, &serverTaskHandle);
 }
 
 void BleComboKeyboard::end(void)

@@ -10,7 +10,6 @@
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
 
-
 const uint8_t KEY_LEFT_CTRL = 0x80;
 const uint8_t KEY_LEFT_SHIFT = 0x81;
 const uint8_t KEY_LEFT_ALT = 0x82;
@@ -91,12 +90,13 @@ typedef struct
 class BleComboKeyboard : public Print
 {
 private:
-  BleConnectionStatus* connectionStatus;
-  BLEHIDDevice* hid;
-  BLECharacteristic* inputKeyboard;
-  BLECharacteristic* outputKeyboard;
-  BLECharacteristic* inputMediaKeys;
-  
+  BleConnectionStatus *connectionStatus;
+  BLEHIDDevice *hid;
+  BLECharacteristic *inputKeyboard;
+  BLECharacteristic *outputKeyboard;
+  BLECharacteristic *inputMediaKeys;
+  TaskHandle_t serverTaskHandle;
+
   KeyReport _keyReport;
   MediaKeyReport _mediaKeyReport;
   static void taskServer(void* pvParameter);
