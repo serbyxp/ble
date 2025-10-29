@@ -67,18 +67,26 @@ bool loadDeviceConfig()
   g_config.transport = sanitizeTransport(g_preferences.getUChar("transport", static_cast<uint8_t>(TransportType::Websocket)));
   g_config.uartBaudRate = sanitizeBaudRate(g_preferences.getULong("uartBaud", UART_BAUD_DEFAULT));
 
-  String ssid = g_preferences.getString("ssid", "");
-  String password = g_preferences.getString("password", "");
+  auto getOptionalString = [](Preferences &prefs, const char *key) {
+    if (!prefs.isKey(key))
+    {
+      return String();
+    }
+    return prefs.getString(key, "");
+  };
+
+  String ssid = getOptionalString(g_preferences, "ssid");
+  String password = getOptionalString(g_preferences, "password");
 
   g_config.wifi.ssid = ssid;
   g_config.wifi.password = password;
   g_config.hasWifiCredentials = ssid.length() > 0;
 
-  String bleName = g_preferences.getString(KEY_BLE_NAME, "");
+  String bleName = getOptionalString(g_preferences, KEY_BLE_NAME);
   g_config.bleDeviceName = bleName;
   g_config.hasBleDeviceName = bleName.length() > 0;
 
-  String bleManufacturer = g_preferences.getString(KEY_BLE_MANUFACTURER, "");
+  String bleManufacturer = getOptionalString(g_preferences, KEY_BLE_MANUFACTURER);
   g_config.bleManufacturerName = bleManufacturer;
   g_config.hasBleManufacturerName = bleManufacturer.length() > 0;
 
