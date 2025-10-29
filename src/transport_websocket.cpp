@@ -79,7 +79,8 @@ namespace
     bool apStarted = WiFi.softAP(g_apSsid.c_str(), AP_PASSWORD);
     if (!apStarted)
     {
-      Serial.println(F("[WS] softAP() returned false; AP may not have started"));
+      Serial.println(F("[WS] Failed to start Access Point; will retry later"));
+      return;
     }
     g_apIp = WiFi.softAPIP();
 
