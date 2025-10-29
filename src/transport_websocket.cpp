@@ -3,12 +3,14 @@
 #include "command_message.h"
 
 #include <Arduino.h>
+#include <ArduinoJson.h>
 #include <WebServer.h>
 #include <WebSocketsServer.h>
 #include <WiFi.h>
 #include <cstring>
 
 #include "web/index.html"
+#include "device_config.h"
 
 namespace
 {
@@ -18,6 +20,8 @@ namespace
   QueueHandle_t g_queue = nullptr;
   WebSocketsServer g_websocket(WEBSOCKET_PORT);
   WebServer g_httpServer(HTTP_PORT);
+  bool g_running = false;
+  bool g_handlersRegistered = false;
 
   void sendQueueFull(uint8_t clientId)
   {
@@ -79,11 +83,119 @@ namespace
     g_httpServer.send_P(200, "text/html", INDEX_HTML);
   }
 
+  void sendCorsHeaders()
+  {
+    g_httpServer.sendHeader("Access-Control-Allow-Origin", "*");
+    g_httpServer.sendHeader("Access-Control-Allow-Methods", "GET,POST,OPTIONS");
+    g_httpServer.sendHeader("Access-Control-Allow-Headers", "Content-Type");
+  }
+
+  void sendJsonDocument(int statusCode, const JsonDocument &document)
+  {
+    String body;
+    serializeJson(document, body);
+    sendCorsHeaders();
+    g_httpServer.sendHeader("Cache-Control", "no-store, no-cache, must-revalidate");
+    g_httpServer.send(statusCode, "application/json", body);
+  }
+
+  void sendErrorResponse(int statusCode, const char *message)
+  {
+    StaticJsonDocument<128> doc;
+    doc["status"] = "error";
+    doc["message"] = message;
+    sendJsonDocument(statusCode, doc);
+  }
+
+  void sendConfigResponse(const DeviceConfig &config)
+  {
+    StaticJsonDocument<128> doc;
+    doc["transport"] = deviceConfigTransportToString(config.transport);
+    doc["uartBaud"] = config.uartBaud;
+    sendJsonDocument(200, doc);
+  }
+
+  void handleConfigGet()
+  {
+    DeviceConfig config = deviceConfigGet();
+    sendConfigResponse(config);
+  }
+
+  void handleConfigPost()
+  {
+    String payload = g_httpServer.arg("plain");
+    if (!payload.length())
+    {
+      sendErrorResponse(400, "Request body required");
+      return;
+    }
+
+    StaticJsonDocument<256> doc;
+    DeserializationError err = deserializeJson(doc, payload);
+    if (err)
+    {
+      sendErrorResponse(400, "Invalid JSON payload");
+      return;
+    }
+
+    DeviceConfig nextConfig = deviceConfigGet();
+
+    if (doc.containsKey("transport"))
+    {
+      const char *transportValue = doc["transport"].as<const char *>();
+      if (!transportValue)
+      {
+        sendErrorResponse(400, "transport must be a string");
+        return;
+      }
+
+      TransportType transportType;
+      if (!deviceConfigParseTransport(String(transportValue), transportType))
+      {
+        sendErrorResponse(400, "transport must be 'websocket' or 'uart'");
+        return;
+      }
+
+      nextConfig.transport = transportType;
+    }
+
+    if (doc.containsKey("uartBaud"))
+    {
+      long baud = doc["uartBaud"].as<long>();
+      if (baud <= 0)
+      {
+        sendErrorResponse(400, "uartBaud must be a positive integer");
+        return;
+      }
+      nextConfig.uartBaud = static_cast<uint32_t>(baud);
+    }
+
+    if (!deviceConfigSave(nextConfig))
+    {
+      sendErrorResponse(500, "Failed to store configuration");
+      return;
+    }
+
+    deviceConfigSet(nextConfig);
+    sendConfigResponse(nextConfig);
+  }
+
+  void handleConfigOptions()
+  {
+    sendCorsHeaders();
+    g_httpServer.send(204, "text/plain", "");
+  }
+
 } // namespace
 
 void websocketTransportBegin(QueueHandle_t queue)
 {
   g_queue = queue;
+
+  if (g_running)
+  {
+    return;
+  }
 
   WiFi.mode(WIFI_AP);
   WiFi.softAP("ble-hid", "uhid1234");
@@ -94,18 +206,51 @@ void websocketTransportBegin(QueueHandle_t queue)
   g_websocket.begin();
   g_websocket.onEvent(handleWebsocketEvent);
 
-  g_httpServer.on("/", handleIndexHtml);
+  if (!g_handlersRegistered)
+  {
+    g_httpServer.on("/", handleIndexHtml);
+    g_httpServer.on("/api/config", HTTP_GET, handleConfigGet);
+    g_httpServer.on("/api/config", HTTP_POST, handleConfigPost);
+    g_httpServer.on("/api/config", HTTP_OPTIONS, handleConfigOptions);
+    g_handlersRegistered = true;
+  }
+
   g_httpServer.begin();
+  g_running = true;
 }
 
 void websocketTransportLoop()
 {
+  if (!g_running)
+  {
+    return;
+  }
+
   g_websocket.loop();
   g_httpServer.handleClient();
 }
 
 void websocketTransportBroadcast(const char *message)
 {
+  if (!g_running)
+  {
+    return;
+  }
+
   g_websocket.broadcastTXT(message);
+}
+
+void websocketTransportEnd()
+{
+  if (!g_running)
+  {
+    return;
+  }
+
+  g_websocket.close();
+  g_httpServer.stop();
+  WiFi.softAPdisconnect(true);
+  WiFi.mode(WIFI_OFF);
+  g_running = false;
 }
 

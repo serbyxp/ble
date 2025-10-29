@@ -5,6 +5,7 @@
 
 #include "ble_command_processor.h"
 #include "command_message.h"
+#include "device_config.h"
 #include "transport_websocket.h"
 
 namespace
@@ -29,47 +30,89 @@ namespace
     String buffer;
     buffer.reserve(COMMAND_MESSAGE_MAX_LENGTH);
 
-    websocketTransportBegin(g_commandQueue);
+    bool websocketRunning = false;
+    DeviceConfig lastConfig = deviceConfigGet();
+
+    if (lastConfig.transport == TransportType::Websocket)
+    {
+      websocketTransportBegin(g_commandQueue);
+      websocketRunning = true;
+    }
 
     for (;;)
     {
-      while (Serial.available())
+      DeviceConfig config = deviceConfigGet();
+
+      if (config.transport == TransportType::Websocket)
       {
-        char c = static_cast<char>(Serial.read());
-
-        if (c == '\r')
+        if (!websocketRunning)
         {
-          continue;
-        }
-
-        if (c == '\n')
-        {
-          if (buffer.length() > 0)
-          {
-            CommandMessage message;
-            message.length = buffer.length();
-            buffer.toCharArray(message.payload, COMMAND_MESSAGE_MAX_LENGTH + 1);
-            message.payload[message.length] = '\0';
-            if (xQueueSend(g_commandQueue, &message, 0) != pdPASS)
-            {
-              sendQueueFull();
-            }
-            buffer = "";
-          }
-          continue;
-        }
-
-        if (buffer.length() >= COMMAND_MESSAGE_MAX_LENGTH)
-        {
-          sendInputTooLong();
+          websocketTransportBegin(g_commandQueue);
+          websocketRunning = true;
           buffer = "";
-          continue;
+        }
+      }
+      else
+      {
+        if (websocketRunning)
+        {
+          websocketTransportEnd();
+          websocketRunning = false;
         }
 
-        buffer += c;
+        if (config.uartBaud != lastConfig.uartBaud || lastConfig.transport != TransportType::Uart)
+        {
+          Serial.updateBaudRate(config.uartBaud);
+        }
+
+        if (lastConfig.transport != TransportType::Uart)
+        {
+          buffer = "";
+        }
+
+        while (Serial.available())
+        {
+          char c = static_cast<char>(Serial.read());
+
+          if (c == '\r')
+          {
+            continue;
+          }
+
+          if (c == '\n')
+          {
+            if (buffer.length() > 0)
+            {
+              CommandMessage message;
+              message.length = buffer.length();
+              buffer.toCharArray(message.payload, COMMAND_MESSAGE_MAX_LENGTH + 1);
+              message.payload[message.length] = '\0';
+              if (xQueueSend(g_commandQueue, &message, 0) != pdPASS)
+              {
+                sendQueueFull();
+              }
+              buffer = "";
+            }
+            continue;
+          }
+
+          if (buffer.length() >= COMMAND_MESSAGE_MAX_LENGTH)
+          {
+            sendInputTooLong();
+            buffer = "";
+            continue;
+          }
+
+          buffer += c;
+        }
       }
 
-      websocketTransportLoop();
+      if (websocketRunning)
+      {
+        websocketTransportLoop();
+      }
+
+      lastConfig = config;
       vTaskDelay(pdMS_TO_TICKS(2));
     }
   }
@@ -96,7 +139,10 @@ namespace
 
 void setup()
 {
-  Serial.begin(115200);
+  deviceConfigInitialize();
+  DeviceConfig config = deviceConfigGet();
+
+  Serial.begin(config.uartBaud);
 
   g_commandQueue = xQueueCreate(COMMAND_QUEUE_LENGTH, sizeof(CommandMessage));
   if (!g_commandQueue)
@@ -106,6 +152,11 @@ void setup()
     {
       delay(1000);
     }
+  }
+
+  if (config.transport == TransportType::Websocket)
+  {
+    websocketTransportBegin(g_commandQueue);
   }
 
   xTaskCreatePinnedToCore(transportTask, "transport", 4096, nullptr, 1, nullptr, 1);
