@@ -7,6 +7,7 @@
 #include <stdlib.h>
 #include <strings.h>
 
+#include "device_config.h"
 #include "transport_websocket.h"
 
 namespace
@@ -164,8 +165,15 @@ namespace
 
   void broadcastJson(const String &message)
   {
-    Serial.println(message);
-    websocketTransportBroadcast(message.c_str());
+    DeviceConfig config = deviceConfigGet();
+    if (config.transport == TransportType::Uart)
+    {
+      Serial.println(message);
+    }
+    if (config.transport == TransportType::Websocket)
+    {
+      websocketTransportBroadcast(message.c_str());
+    }
   }
 
   void sendStatusOk()
