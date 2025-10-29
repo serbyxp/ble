@@ -123,22 +123,22 @@ namespace
 
   void handleConfigGet()
   {
-    DynamicJsonDocument doc(1024);
+    JsonDocument doc(1024);
     const DeviceConfig &config = getDeviceConfig();
 
     doc["transport"] = transportTypeToString(config.transport);
 
-    JsonObject uart = doc.createNestedObject("uart");
+    JsonObject uart = doc["uart"].to<JsonObject>();
     uart["baud"] = config.uartBaudRate;
     size_t supportedCount = 0;
     const uint32_t *supported = getSupportedUartBaudRates(supportedCount);
-    JsonArray supportedArray = uart.createNestedArray("supported");
+    JsonArray supportedArray = uart["supported"].to<JsonArray>();
     for (size_t i = 0; i < supportedCount; ++i)
     {
       supportedArray.add(supported[i]);
     }
 
-    JsonObject wifi = doc.createNestedObject("wifi");
+    JsonObject wifi = doc["wifi"].to<JsonObject>();
     wifi["ssid"] = config.hasWifiCredentials ? config.wifi.ssid : "";
     wifi["connected"] = WiFi.status() == WL_CONNECTED;
     wifi["ip"] = WiFi.status() == WL_CONNECTED ? WiFi.localIP().toString() : "";
@@ -152,7 +152,7 @@ namespace
 
   void respondError(uint16_t code, const char *message)
   {
-    DynamicJsonDocument doc(256);
+    JsonDocument doc(256);
     doc["status"] = "error";
     doc["message"] = message;
     String payload;
@@ -192,7 +192,7 @@ namespace
       return;
     }
 
-    DynamicJsonDocument doc(1024);
+    JsonDocument doc(1024);
     DeserializationError error = deserializeJson(doc, body);
     if (error)
     {
@@ -205,7 +205,7 @@ namespace
     bool wifiChanged = false;
     bool uartChanged = false;
 
-    if (doc.containsKey("transport"))
+    if (!doc["transport"].isNull())
     {
       TransportType newTransport;
       if (!parseTransportType(doc["transport"].as<String>(), newTransport))
@@ -220,10 +220,10 @@ namespace
       }
     }
 
-    if (doc.containsKey("uart"))
+    if (!doc["uart"].isNull())
     {
       JsonObject uart = doc["uart"].as<JsonObject>();
-      if (uart.containsKey("baud"))
+      if (!uart["baud"].isNull())
       {
         if (!uart["baud"].is<uint32_t>())
         {
@@ -245,10 +245,10 @@ namespace
       }
     }
 
-    if (doc.containsKey("wifi"))
+    if (!doc["wifi"].isNull())
     {
       JsonObject wifi = doc["wifi"].as<JsonObject>();
-      bool forget = wifi.containsKey("forget") && wifi["forget"].as<bool>();
+      bool forget = !wifi["forget"].isNull() && wifi["forget"].as<bool>();
       if (forget)
       {
         if (config.hasWifiCredentials || !config.wifi.ssid.isEmpty())
@@ -262,8 +262,8 @@ namespace
       }
       else
       {
-        bool hasSsid = wifi.containsKey("ssid");
-        bool hasPassword = wifi.containsKey("password");
+        bool hasSsid = !wifi["ssid"].isNull();
+        bool hasPassword = !wifi["password"].isNull();
         String newSsid = hasSsid ? String(wifi["ssid"].as<const char *>()) : config.wifi.ssid;
         String newPassword = hasPassword ? String(wifi["password"].as<const char *>()) : config.wifi.password;
         bool newHasCredentials = newSsid.length() > 0;
@@ -307,7 +307,7 @@ namespace
 
     connectOrDisconnectBasedOnConfig(wifiChanged);
 
-    DynamicJsonDocument response(128);
+    JsonDocument response(128);
     response["status"] = "ok";
     String payload;
     serializeJson(response, payload);
@@ -316,13 +316,13 @@ namespace
 
   void handleScanNetworks()
   {
-    DynamicJsonDocument doc(2048);
-    JsonArray networks = doc.createNestedArray("networks");
+    JsonDocument doc(2048);
+    JsonArray networks = doc["networks"].to<JsonArray>();
 
     int16_t count = WiFi.scanNetworks(/*async=*/false, /*hidden=*/true);
     for (int16_t i = 0; i < count; ++i)
     {
-      JsonObject network = networks.createNestedObject();
+      JsonObject network = networks.add<JsonObject>();
       network["ssid"] = WiFi.SSID(i);
       network["rssi"] = WiFi.RSSI(i);
       network["secure"] = WiFi.encryptionType(i) != WIFI_AUTH_OPEN;
