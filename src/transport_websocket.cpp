@@ -23,6 +23,8 @@ namespace
   bool g_running = false;
   bool g_handlersRegistered = false;
 
+  void sendErrorResponse(int statusCode, const char *message);
+
   void sendQueueFull(uint8_t clientId)
   {
     static const char RESPONSE[] = "{\"status\":\"error\",\"message\":\"Command queue full\"}";
@@ -118,7 +120,7 @@ namespace
 
   void sendErrorResponse(int statusCode, const char *message)
   {
-    StaticJsonDocument<128> doc;
+    JsonDocument doc;
     doc["status"] = "error";
     doc["message"] = message;
     sendJsonDocument(statusCode, doc);
@@ -126,7 +128,7 @@ namespace
 
   void sendConfigResponse(const DeviceConfig &config)
   {
-    StaticJsonDocument<128> doc;
+    JsonDocument doc;
     doc["transport"] = deviceConfigTransportToString(config.transport);
     doc["uartBaud"] = config.uartBaud;
     sendJsonDocument(200, doc);
@@ -147,7 +149,7 @@ namespace
       return;
     }
 
-    StaticJsonDocument<256> doc;
+    JsonDocument doc;
     DeserializationError err = deserializeJson(doc, payload);
     if (err)
     {
@@ -157,15 +159,15 @@ namespace
 
     DeviceConfig nextConfig = deviceConfigGet();
 
-    if (doc.containsKey("transport"))
+    if (!doc["transport"].isNull())
     {
-      const char *transportValue = doc["transport"].as<const char *>();
-      if (!transportValue)
+      if (!doc["transport"].is<const char *>())
       {
         sendErrorResponse(400, "transport must be a string");
         return;
       }
 
+      const char *transportValue = doc["transport"].as<const char *>();
       TransportType transportType;
       if (!deviceConfigParseTransport(String(transportValue), transportType))
       {
@@ -176,8 +178,14 @@ namespace
       nextConfig.transport = transportType;
     }
 
-    if (doc.containsKey("uartBaud"))
+    if (!doc["uartBaud"].isNull())
     {
+      if (!doc["uartBaud"].is<long>())
+      {
+        sendErrorResponse(400, "uartBaud must be a positive integer");
+        return;
+      }
+
       long baud = doc["uartBaud"].as<long>();
       if (baud <= 0)
       {
@@ -206,7 +214,7 @@ namespace
   void sendWifiStatusResponse()
   {
     WifiManagerStatus status = wifiManagerGetStatus();
-    StaticJsonDocument<256> doc;
+    JsonDocument doc;
     doc["hasCredentials"] = status.hasCredentials;
     doc["connected"] = status.connected;
     if (!status.connectedSsid.isEmpty())
@@ -234,20 +242,13 @@ namespace
   void handleWifiScanGet()
   {
     std::vector<WifiScanResult> networks = wifiManagerScanNetworks();
-    size_t capacity = JSON_OBJECT_SIZE(3) + JSON_ARRAY_SIZE(networks.size()) + JSON_STRING_SIZE(2);
-    for (const WifiScanResult &network : networks)
-    {
-      capacity += JSON_OBJECT_SIZE(4);
-      capacity += JSON_STRING_SIZE(network.ssid.length());
-    }
-    capacity += 32;
-    DynamicJsonDocument doc(capacity);
+    JsonDocument doc;
     doc["status"] = "ok";
     doc["count"] = static_cast<uint32_t>(networks.size());
-    JsonArray array = doc.createNestedArray("networks");
+    JsonArray array = doc["networks"].to<JsonArray>();
     for (const WifiScanResult &network : networks)
     {
-      JsonObject entry = array.createNestedObject();
+      JsonObject entry = array.add<JsonObject>();
       entry["ssid"] = network.ssid;
       entry["rssi"] = network.rssi;
       entry["secure"] = network.secure;
@@ -264,7 +265,7 @@ namespace
       return;
     }
 
-    StaticJsonDocument<256> doc;
+    JsonDocument doc;
     DeserializationError err = deserializeJson(doc, g_httpServer.arg("plain"));
     if (err)
     {
@@ -272,7 +273,7 @@ namespace
       return;
     }
 
-    if (doc.containsKey("forget") && doc["forget"].as<bool>())
+    if (doc["forget"].is<bool>() && doc["forget"].as<bool>())
     {
       if (!wifiManagerForgetCredentials())
       {
@@ -283,9 +284,15 @@ namespace
       return;
     }
 
-    if (!doc.containsKey("ssid"))
+    if (doc["ssid"].isNull())
     {
       sendErrorResponse(400, "ssid is required");
+      return;
+    }
+
+    if (!doc["ssid"].is<const char *>())
+    {
+      sendErrorResponse(400, "ssid must be a string");
       return;
     }
 
@@ -297,7 +304,7 @@ namespace
     }
 
     String password;
-    if (doc.containsKey("password") && !doc["password"].isNull())
+    if (!doc["password"].isNull())
     {
       if (!doc["password"].is<const char *>())
       {
