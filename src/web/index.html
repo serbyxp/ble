@@ -2,9 +2,10 @@
 
 #include <pgmspace.h>
 
-const char INDEX_HTML[] PROGMEM = R"rawliteral(
-<!DOCTYPE html>
-<html lang="en">
+  const char INDEX_HTML[] PROGMEM = R"rawliteral(
+  <!DOCTYPE html>
+  <html lang="en">
+
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
@@ -19,24 +20,28 @@ const char INDEX_HTML[] PROGMEM = R"rawliteral(
         flex-direction: column;
         min-height: 100vh;
       }
+
       header {
         padding: 1.5rem;
         text-align: center;
         background: #1e293b;
         box-shadow: 0 2px 6px rgba(15, 23, 42, 0.6);
       }
+
       main {
         flex: 1;
         padding: 1.5rem;
         display: grid;
         gap: 1.5rem;
       }
+
       section {
         background: rgba(30, 41, 59, 0.9);
         padding: 1.5rem;
         border-radius: 12px;
         box-shadow: 0 8px 24px rgba(15, 23, 42, 0.4);
       }
+
       textarea {
         width: 100%;
         min-height: 160px;
@@ -48,6 +53,7 @@ const char INDEX_HTML[] PROGMEM = R"rawliteral(
         resize: vertical;
         font-size: 0.95rem;
       }
+
       button {
         padding: 0.75rem 1.5rem;
         background: linear-gradient(135deg, #38bdf8, #6366f1);
@@ -58,13 +64,16 @@ const char INDEX_HTML[] PROGMEM = R"rawliteral(
         cursor: pointer;
         transition: transform 0.2s ease, box-shadow 0.2s ease;
       }
+
       button:hover {
         transform: translateY(-1px);
         box-shadow: 0 10px 30px rgba(56, 189, 248, 0.3);
       }
+
       #status {
         font-weight: 600;
       }
+
       #log {
         max-height: 240px;
         overflow-y: auto;
@@ -74,12 +83,14 @@ const char INDEX_HTML[] PROGMEM = R"rawliteral(
         border-radius: 12px;
         border: 1px solid rgba(94, 234, 212, 0.2);
       }
+
       .log-entry {
         margin-bottom: 0.5rem;
         word-break: break-word;
       }
     </style>
   </head>
+
   <body>
     <header>
       <h1>BLE Bridge Control</h1>
@@ -94,7 +105,8 @@ const char INDEX_HTML[] PROGMEM = R"rawliteral(
           <code>{"device":"keyboard","action":"tap","key":"ENTER"}</code>)
           and press Send.
         </p>
-        <textarea id="command" placeholder="{\n  &quot;device&quot;: &quot;keyboard&quot;,\n  &quot;action&quot;: &quot;tap&quot;,\n  &quot;key&quot;: &quot;ENTER&quot;\n}"></textarea>
+        <textarea id="command"
+          placeholder="{\n  &quot;device&quot;: &quot;keyboard&quot;,\n  &quot;action&quot;: &quot;tap&quot;,\n  &quot;key&quot;: &quot;ENTER&quot;\n}"></textarea>
         <div style="margin-top: 1rem; display: flex; gap: 1rem; flex-wrap: wrap;">
           <button id="send">Send</button>
           <button id="clear">Clear Log</button>
@@ -171,5 +183,6 @@ const char INDEX_HTML[] PROGMEM = R"rawliteral(
       connect();
     </script>
   </body>
-</html>
-)rawliteral";
+
+  </html>
+  )rawliteral";
