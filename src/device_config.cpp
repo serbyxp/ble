@@ -1,5 +1,6 @@
 #include "device_config.h"
 
+#include <Arduino.h>
 #include <Preferences.h>
 
 namespace
@@ -53,6 +54,7 @@ bool loadDeviceConfig()
 {
   if (!g_preferences.begin(NAMESPACE, true))
   {
+    Serial.println(F("[CFG] Failed to open preferences in read-only mode"));
     return false;
   }
 
@@ -67,6 +69,11 @@ bool loadDeviceConfig()
   g_config.hasWifiCredentials = ssid.length() > 0;
 
   g_preferences.end();
+
+  Serial.printf("[CFG] Loaded transport=%s uart=%lu wifiSsid=%s\n",
+                transportTypeToString(g_config.transport),
+                static_cast<unsigned long>(g_config.uartBaudRate),
+                g_config.hasWifiCredentials ? g_config.wifi.ssid.c_str() : "<none>");
   return true;
 }
 
@@ -74,17 +81,20 @@ bool saveDeviceConfig()
 {
   if (!g_preferences.begin(NAMESPACE, false))
   {
+    Serial.println(F("[CFG] Failed to open preferences for write"));
     return false;
   }
 
   bool ok = true;
   if (!g_preferences.putUChar("transport", static_cast<uint8_t>(g_config.transport)))
   {
+    Serial.println(F("[CFG] Failed to persist transport setting"));
     ok = false;
   }
 
   if (!g_preferences.putULong("uartBaud", g_config.uartBaudRate))
   {
+    Serial.println(F("[CFG] Failed to persist UART baud rate"));
     ok = false;
   }
 
@@ -92,10 +102,12 @@ bool saveDeviceConfig()
   {
     if (!g_preferences.putString("ssid", g_config.wifi.ssid))
     {
+      Serial.println(F("[CFG] Failed to persist WiFi SSID"));
       ok = false;
     }
     if (!g_preferences.putString("password", g_config.wifi.password))
     {
+      Serial.println(F("[CFG] Failed to persist WiFi password"));
       ok = false;
     }
   }
@@ -106,6 +118,11 @@ bool saveDeviceConfig()
   }
 
   g_preferences.end();
+  Serial.printf("[CFG] Saved config (ok=%s) transport=%s uart=%lu wifi=%s\n",
+                ok ? "true" : "false",
+                transportTypeToString(g_config.transport),
+                static_cast<unsigned long>(g_config.uartBaudRate),
+                g_config.hasWifiCredentials ? g_config.wifi.ssid.c_str() : "<none>");
   return ok;
 }
 
