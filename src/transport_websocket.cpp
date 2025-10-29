@@ -1,7 +1,5 @@
 #include "transport_websocket.h"
 
-#ifdef ENABLE_WEBSOCKET_TRANSPORT
-
 #include "command_message.h"
 
 #include <Arduino.h>
@@ -111,4 +109,3 @@ void websocketTransportBroadcast(const char *message)
   g_websocket.broadcastTXT(message);
 }
 
-#endif
