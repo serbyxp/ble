@@ -219,7 +219,7 @@ String getEffectiveBleDeviceName()
   {
     return config.bleDeviceName;
   }
-  return websocketTransportGetApSsid();
+  return generateApSsid();
 }
 
 String getEffectiveBleDeviceManufacturer()

@@ -7,4 +7,4 @@
 void websocketTransportBegin(QueueHandle_t queue);
 void websocketTransportLoop();
 void websocketTransportBroadcast(const char *message);
-String websocketTransportGetApSsid();
+String generateApSsid();

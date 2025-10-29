@@ -13,6 +13,14 @@
 
 #include "web/index.html"
 
+String generateApSsid()
+{
+  uint32_t identifier = static_cast<uint32_t>(ESP.getEfuseMac() & 0xFFFFFF);
+  char buffer[20];
+  snprintf(buffer, sizeof(buffer), "ble-bridge-%06X", identifier);
+  return String(buffer);
+}
+
 namespace
 {
   constexpr uint16_t WEBSOCKET_PORT = 81;
@@ -51,23 +59,6 @@ namespace
     g_websocket.sendTXT(clientId, RESPONSE);
   }
 
-  String generateApSsid()
-  {
-    uint32_t identifier = static_cast<uint32_t>(ESP.getEfuseMac() & 0xFFFFFF);
-    char buffer[20];
-    snprintf(buffer, sizeof(buffer), "ble-bridge-%06X", identifier);
-    return String(buffer);
-  }
-
-  const String &ensureApSsidInitialized()
-  {
-    if (g_apSsid.isEmpty())
-    {
-      g_apSsid = generateApSsid();
-    }
-    return g_apSsid;
-  }
-
   void startAccessPoint()
   {
     if (g_apActive)
@@ -75,7 +66,7 @@ namespace
       return;
     }
 
-    ensureApSsidInitialized();
+    g_apSsid = generateApSsid();
 
     WiFi.mode(WIFI_AP_STA);
     WiFi.softAP(g_apSsid.c_str(), AP_PASSWORD);
@@ -505,11 +496,6 @@ namespace
   }
 
 } // namespace
-
-String websocketTransportGetApSsid()
-{
-  return ensureApSsidInitialized();
-}
 
 void websocketTransportBegin(QueueHandle_t queue)
 {
