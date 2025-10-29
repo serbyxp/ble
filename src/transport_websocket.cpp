@@ -128,6 +128,16 @@ namespace
 
     doc["transport"] = transportTypeToString(config.transport);
 
+    JsonObject uart = doc.createNestedObject("uart");
+    uart["baud"] = config.uartBaudRate;
+    size_t supportedCount = 0;
+    const uint32_t *supported = getSupportedUartBaudRates(supportedCount);
+    JsonArray supportedArray = uart.createNestedArray("supported");
+    for (size_t i = 0; i < supportedCount; ++i)
+    {
+      supportedArray.add(supported[i]);
+    }
+
     JsonObject wifi = doc.createNestedObject("wifi");
     wifi["ssid"] = config.hasWifiCredentials ? config.wifi.ssid : "";
     wifi["connected"] = WiFi.status() == WL_CONNECTED;
@@ -193,6 +203,7 @@ namespace
     DeviceConfig &config = getMutableDeviceConfig();
     bool configChanged = false;
     bool wifiChanged = false;
+    bool uartChanged = false;
 
     if (doc.containsKey("transport"))
     {
@@ -206,6 +217,31 @@ namespace
       {
         config.transport = newTransport;
         configChanged = true;
+      }
+    }
+
+    if (doc.containsKey("uart"))
+    {
+      JsonObject uart = doc["uart"].as<JsonObject>();
+      if (uart.containsKey("baud"))
+      {
+        if (!uart["baud"].is<uint32_t>())
+        {
+          respondError(400, "Invalid UART baud rate");
+          return;
+        }
+        uint32_t newBaud = uart["baud"].as<uint32_t>();
+        if (!isSupportedUartBaudRate(newBaud))
+        {
+          respondError(400, "Unsupported UART baud rate");
+          return;
+        }
+        if (config.uartBaudRate != newBaud)
+        {
+          config.uartBaudRate = newBaud;
+          configChanged = true;
+          uartChanged = true;
+        }
       }
     }
 
@@ -262,6 +298,11 @@ namespace
     if (configChanged)
     {
       saveDeviceConfig();
+    }
+
+    if (uartChanged)
+    {
+      notifyUartConfigChanged();
     }
 
     connectOrDisconnectBasedOnConfig(wifiChanged);

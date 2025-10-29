@@ -34,10 +34,17 @@ namespace
     websocketTransportBegin(g_commandQueue);
 
     TransportType lastTransport = g_config.transport;
+    uint32_t lastBaudRate = g_config.uartBaudRate;
 
     for (;;)
     {
       const DeviceConfig &config = getDeviceConfig();
+
+      if (consumeUartConfigChanged() || config.uartBaudRate != lastBaudRate)
+      {
+        Serial.begin(config.uartBaudRate);
+        lastBaudRate = config.uartBaudRate;
+      }
 
       if (config.transport != lastTransport)
       {
@@ -121,11 +128,19 @@ namespace
 
 void setup()
 {
-  Serial.begin(115200);
+  Serial.begin(UART_BAUD_DEFAULT);
 
   if (!loadDeviceConfig())
   {
     Serial.println(F("{\"status\":\"warning\",\"message\":\"Using default configuration\"}"));
+  }
+  else
+  {
+    const DeviceConfig &config = getDeviceConfig();
+    if (config.uartBaudRate != UART_BAUD_DEFAULT)
+    {
+      Serial.begin(config.uartBaudRate);
+    }
   }
 
   g_commandQueue = xQueueCreate(COMMAND_QUEUE_LENGTH, sizeof(CommandMessage));
