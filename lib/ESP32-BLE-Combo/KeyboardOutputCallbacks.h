@@ -11,7 +11,7 @@ class KeyboardOutputCallbacks : public BLECharacteristicCallbacks
 {
 public:
   KeyboardOutputCallbacks(void);
-  void onWrite(BLECharacteristic* me);
+  void onWrite(BLECharacteristic *me);
 };
 
 #endif // CONFIG_BT_ENABLED

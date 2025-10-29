@@ -3,9 +3,9 @@
 void BleComboMouse::click(uint8_t b)
 {
   _buttons = b;
-  move(0,0,0,0);
+  move(0, 0, 0, 0);
   _buttons = 0;
-  move(0,0,0,0);
+  move(0, 0, 0, 0);
 }
 
 void BleComboMouse::move(signed char x, signed char y, signed char wheel, signed char hWheel)
@@ -28,7 +28,7 @@ void BleComboMouse::buttons(uint8_t b)
   if (b != _buttons)
   {
     _buttons = b;
-    move(0,0,0,0);
+    move(0, 0, 0, 0);
   }
 }
 

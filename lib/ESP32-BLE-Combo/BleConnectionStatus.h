@@ -12,12 +12,12 @@ class BleConnectionStatus : public BLEServerCallbacks
 public:
   BleConnectionStatus(void);
   bool connected = false;
-  void onConnect(BLEServer* pServer);
-  void onDisconnect(BLEServer* pServer);
-  BLECharacteristic* inputKeyboard;
-  BLECharacteristic* outputKeyboard;
-  BLECharacteristic* inputMouse;
-  BLECharacteristic* inputMediaKeys;
+  void onConnect(BLEServer *pServer);
+  void onDisconnect(BLEServer *pServer);
+  BLECharacteristic *inputKeyboard;
+  BLECharacteristic *outputKeyboard;
+  BLECharacteristic *inputMouse;
+  BLECharacteristic *inputMediaKeys;
 };
 
 #endif // CONFIG_BT_ENABLED

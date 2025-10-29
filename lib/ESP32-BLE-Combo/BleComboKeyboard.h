@@ -8,7 +8,6 @@
 #include "BLECharacteristic.h"
 #include "Print.h"
 
-
 const uint8_t KEY_LEFT_CTRL = 0x80;
 const uint8_t KEY_LEFT_SHIFT = 0x81;
 const uint8_t KEY_LEFT_ALT = 0x82;
@@ -77,7 +76,6 @@ const MediaKeyReport KEY_MEDIA_WWW_BACK = {0, 32};
 const MediaKeyReport KEY_MEDIA_CONSUMER_CONTROL_CONFIGURATION = {0, 64}; // Media Selection
 const MediaKeyReport KEY_MEDIA_EMAIL_READER = {0, 128};
 
-
 //  Low level key report: up to 6 keys and shift, ctrl etc at once
 typedef struct
 {
@@ -89,22 +87,22 @@ typedef struct
 class BleComboKeyboard : public Print
 {
 private:
-  BleConnectionStatus* connectionStatus;
-  BLEHIDDevice* hid;
-  BLECharacteristic* inputKeyboard;
-  BLECharacteristic* outputKeyboard;
-  BLECharacteristic* inputMediaKeys;
-  
+  BleConnectionStatus *connectionStatus;
+  BLEHIDDevice *hid;
+  BLECharacteristic *inputKeyboard;
+  BLECharacteristic *outputKeyboard;
+  BLECharacteristic *inputMediaKeys;
+
   KeyReport _keyReport;
   MediaKeyReport _mediaKeyReport;
-  static void taskServer(void* pvParameter);
+  static void taskServer(void *pvParameter);
 
 public:
   BleComboKeyboard(std::string deviceName = "uHID", std::string deviceManufacturer = "uHID Solution", uint8_t batteryLevel = 100);
   void begin(void);
   void end(void);
-  void sendReport(KeyReport* keys);
-  void sendReport(MediaKeyReport* keys);
+  void sendReport(KeyReport *keys);
+  void sendReport(MediaKeyReport *keys);
   size_t press(uint8_t k);
   size_t press(const MediaKeyReport k);
   size_t release(uint8_t k);
@@ -112,7 +110,7 @@ public:
   size_t write(uint8_t c);
   size_t write(const MediaKeyReport c);
   size_t write(const uint8_t *buffer, size_t size);
-  
+
   void releaseAll(void);
   bool isConnected(void);
   void setBatteryLevel(uint8_t level);
@@ -120,8 +118,7 @@ public:
   std::string deviceManufacturer;
   std::string deviceName;
 
-  BLECharacteristic* inputMouse;
-
+  BLECharacteristic *inputMouse;
 };
 
 #endif // CONFIG_BT_ENABLED
