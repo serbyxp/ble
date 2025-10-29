@@ -35,30 +35,27 @@ namespace
 
     auto readLegacyString = [&](String &outValue) -> bool {
       size_t allowedLength = (maxLength > 0) ? maxLength : MAX_STORED_STRING_LENGTH;
-      size_t legacyLengthWithNull = prefs.getString(key, nullptr, 0);
-      if (legacyLengthWithNull == 0)
-      {
-        return false;
-      }
+      size_t bufferSize = allowedLength + 1;
 
-      size_t legacyLength = legacyLengthWithNull - 1;
-      if (legacyLength > allowedLength)
-      {
-        return false;
-      }
-
-      std::unique_ptr<char[]> buffer(new (std::nothrow) char[legacyLength + 1]);
+      std::unique_ptr<char[]> buffer(new (std::nothrow) char[bufferSize]);
       if (!buffer)
       {
         return false;
       }
 
-      size_t readLength = prefs.getString(key, buffer.get(), legacyLength + 1);
-      if (readLength > legacyLength)
+      size_t readLength = prefs.getString(key, buffer.get(), bufferSize);
+      if (readLength == 0)
       {
-        readLength = legacyLength;
+        return false;
       }
-      buffer[readLength] = '\0';
+
+      buffer[bufferSize - 1] = '\0';
+      size_t valueLength = readLength - 1;
+      if (valueLength >= bufferSize)
+      {
+        valueLength = bufferSize - 1;
+      }
+      buffer[valueLength] = '\0';
 
       outValue = String(buffer.get());
 
@@ -73,59 +70,55 @@ namespace
     };
 
     size_t storedLength = prefs.getBytesLength(key);
-    if (storedLength > 0)
+    if (storedLength == 0)
     {
-      if (maxLength > 0 && storedLength > (maxLength + 1))
+      String legacyValue;
+      if (readLegacyString(legacyValue))
       {
-        return String();
+        return legacyValue;
       }
-
-      size_t copyLength = storedLength;
-      if (maxLength > 0 && copyLength > maxLength)
-      {
-        copyLength = maxLength;
-      }
-      else if (maxLength == 0 && copyLength > MAX_STORED_STRING_LENGTH)
-      {
-        copyLength = MAX_STORED_STRING_LENGTH;
-      }
-
-      std::unique_ptr<char[]> buffer(new (std::nothrow) char[copyLength + 1]);
-      if (!buffer)
-      {
-        return String();
-      }
-
-      size_t read = prefs.getBytes(key, buffer.get(), copyLength);
-      if (read == 0)
-      {
-        String legacyValue;
-        if (readLegacyString(legacyValue))
-        {
-          return legacyValue;
-        }
-        return String();
-      }
-
-    size_t bytesToRead = storedLength;
-    size_t maxReadable = copyLength + 1;
-    if (bytesToRead > maxReadable)
-    {
-      bytesToRead = maxReadable;
+      return String();
     }
 
-    size_t read = prefs.getBytes(key, buffer.get(), bytesToRead);
-    if (read == 0)
+    if (maxLength > 0 && storedLength > (maxLength + 1))
     {
       return String();
     }
 
-    String legacyValue;
-    if (readLegacyString(legacyValue))
+    size_t copyLength = storedLength;
+    if (maxLength > 0 && copyLength > maxLength)
     {
-      return legacyValue;
+      copyLength = maxLength;
     }
-    return String();
+    else if (maxLength == 0 && copyLength > MAX_STORED_STRING_LENGTH)
+    {
+      copyLength = MAX_STORED_STRING_LENGTH;
+    }
+
+    std::unique_ptr<char[]> buffer(new (std::nothrow) char[copyLength + 1]);
+    if (!buffer)
+    {
+      return String();
+    }
+
+    size_t read = prefs.getBytes(key, buffer.get(), copyLength);
+    if (read == 0)
+    {
+      String legacyValue;
+      if (readLegacyString(legacyValue))
+      {
+        return legacyValue;
+      }
+      return String();
+    }
+
+    if (read > copyLength)
+    {
+      read = copyLength;
+    }
+
+    buffer[read] = '\0';
+    return String(buffer.get());
   }
 
   bool writePreferenceString(Preferences &prefs, const char *key, const String &value, size_t maxLength)
