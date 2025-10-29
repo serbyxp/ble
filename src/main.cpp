@@ -7,6 +7,7 @@
 #include "command_message.h"
 #include "device_config.h"
 #include "transport_websocket.h"
+#include "wifi_manager.h"
 
 namespace
 {
@@ -41,6 +42,7 @@ namespace
 
     for (;;)
     {
+      wifiManagerLoop();
       DeviceConfig config = deviceConfigGet();
 
       if (config.transport == TransportType::Websocket)
@@ -143,6 +145,9 @@ void setup()
   DeviceConfig config = deviceConfigGet();
 
   Serial.begin(config.uartBaud);
+
+  wifiManagerInitialize();
+  wifiManagerLoop();
 
   g_commandQueue = xQueueCreate(COMMAND_QUEUE_LENGTH, sizeof(CommandMessage));
   if (!g_commandQueue)

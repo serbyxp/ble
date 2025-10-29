@@ -6,11 +6,11 @@
 #include <ArduinoJson.h>
 #include <WebServer.h>
 #include <WebSocketsServer.h>
-#include <WiFi.h>
 #include <cstring>
 
 #include "web/index.html"
 #include "device_config.h"
+#include "wifi_manager.h"
 
 namespace
 {
@@ -186,6 +186,104 @@ namespace
     g_httpServer.send(204, "text/plain", "");
   }
 
+  void sendWifiStatusResponse()
+  {
+    WifiManagerStatus status = wifiManagerGetStatus();
+    StaticJsonDocument<256> doc;
+    doc["hasCredentials"] = status.hasCredentials;
+    doc["connected"] = status.connected;
+    if (!status.connectedSsid.isEmpty())
+    {
+      doc["ssid"] = status.connectedSsid;
+    }
+    if (status.connected)
+    {
+      doc["localIp"] = status.stationIp.toString();
+    }
+    doc["accessPointActive"] = status.accessPointActive;
+    doc["accessPointSsid"] = wifiManagerAccessPointSsid();
+    if (status.accessPointActive)
+    {
+      doc["accessPointIp"] = status.accessPointIp.toString();
+    }
+    sendJsonDocument(200, doc);
+  }
+
+  void handleWifiGet()
+  {
+    sendWifiStatusResponse();
+  }
+
+  void handleWifiPost()
+  {
+    if (!g_httpServer.hasArg("plain"))
+    {
+      sendErrorResponse(400, "Missing request body");
+      return;
+    }
+
+    StaticJsonDocument<256> doc;
+    DeserializationError err = deserializeJson(doc, g_httpServer.arg("plain"));
+    if (err)
+    {
+      sendErrorResponse(400, "Invalid JSON payload");
+      return;
+    }
+
+    if (doc.containsKey("forget") && doc["forget"].as<bool>())
+    {
+      if (!wifiManagerForgetCredentials())
+      {
+        sendErrorResponse(500, "Failed to clear stored credentials");
+        return;
+      }
+      sendWifiStatusResponse();
+      return;
+    }
+
+    if (!doc.containsKey("ssid"))
+    {
+      sendErrorResponse(400, "ssid is required");
+      return;
+    }
+
+    const char *ssidValue = doc["ssid"].as<const char *>();
+    if (!ssidValue)
+    {
+      sendErrorResponse(400, "ssid must be a string");
+      return;
+    }
+
+    String password;
+    if (doc.containsKey("password") && !doc["password"].isNull())
+    {
+      if (!doc["password"].is<const char *>())
+      {
+        sendErrorResponse(400, "password must be a string");
+        return;
+      }
+      const char *passwordValue = doc["password"].as<const char *>();
+      if (passwordValue)
+      {
+        password = String(passwordValue);
+      }
+    }
+
+    if (!wifiManagerSetCredentials(String(ssidValue), password))
+    {
+      sendErrorResponse(400, "ssid must not be empty");
+      return;
+    }
+
+    sendWifiStatusResponse();
+  }
+
+  void handleWifiOptions()
+  {
+    sendCorsHeaders();
+    g_httpServer.send(204, "text/plain", "");
+  }
+
 } // namespace
 
 void websocketTransportBegin(QueueHandle_t queue)
@@ -197,11 +295,23 @@ void websocketTransportBegin(QueueHandle_t queue)
     return;
   }
 
-  WiFi.mode(WIFI_AP);
-  WiFi.softAP("ble-hid", "uhid1234");
-  IPAddress apIp = WiFi.softAPIP();
-  Serial.printf("[WS] Access Point SSID: %s\n", WiFi.softAPSSID().c_str());
-  Serial.printf("[WS] AP IP Address: %s\n", apIp.toString().c_str());
+  WifiManagerStatus wifiStatus = wifiManagerGetStatus();
+  if (!wifiStatus.connected)
+  {
+    wifiManagerEnsureAccessPoint();
+    wifiStatus = wifiManagerGetStatus();
+  }
+
+  if (wifiStatus.connected)
+  {
+    Serial.printf("[WS] Station IP Address: %s\n", wifiStatus.stationIp.toString().c_str());
+  }
+
+  if (wifiStatus.accessPointActive)
+  {
+    Serial.printf("[WS] Access Point SSID: %s\n", wifiManagerAccessPointSsid());
+    Serial.printf("[WS] AP IP Address: %s\n", wifiStatus.accessPointIp.toString().c_str());
+  }
 
   g_websocket.begin();
   g_websocket.onEvent(handleWebsocketEvent);
@@ -212,6 +322,9 @@ void websocketTransportBegin(QueueHandle_t queue)
     g_httpServer.on("/api/config", HTTP_GET, handleConfigGet);
     g_httpServer.on("/api/config", HTTP_POST, handleConfigPost);
     g_httpServer.on("/api/config", HTTP_OPTIONS, handleConfigOptions);
+    g_httpServer.on("/api/wifi", HTTP_GET, handleWifiGet);
+    g_httpServer.on("/api/wifi", HTTP_POST, handleWifiPost);
+    g_httpServer.on("/api/wifi", HTTP_OPTIONS, handleWifiOptions);
     g_handlersRegistered = true;
   }
 
@@ -249,7 +362,5 @@ void websocketTransportEnd()
 
   g_websocket.close();
   g_httpServer.stop();
-  WiFi.softAPdisconnect(true);
-  WiFi.mode(WIFI_OFF);
   g_running = false;
 }
