@@ -95,6 +95,8 @@ namespace
       return;
     }
 
+    WiFi.disconnect(true);
+    WiFi.mode(WIFI_AP);
     IPAddress apIp(192, 168, 4, 1);
     WiFi.softAPConfig(apIp, apIp, IPAddress(255, 255, 255, 0));
     if (WiFi.softAP(ACCESS_POINT_SSID, ACCESS_POINT_PASSWORD))
@@ -141,8 +143,12 @@ namespace
       return;
     }
 
-    WiFi.mode(WIFI_AP_STA);
-    startAccessPoint();
+    if (g_accessPointActive)
+    {
+      stopAccessPoint();
+    }
+
+    WiFi.mode(WIFI_STA);
 
     Serial.printf("[WiFi] Connecting to '%s'\n", g_savedSsid.c_str());
     beginSavedStation();
@@ -156,19 +162,18 @@ namespace
     {
       Serial.println(F("[WiFi] Station connection lost"));
       WiFi.disconnect();
-      WiFi.mode(WIFI_AP_STA);
-      g_accessPointActive = false;
-      startAccessPoint();
-      g_state = WifiState::Connecting;
-      g_connectStart = millis();
-      beginSavedStation();
+      beginStationConnection();
       return;
     }
 
-    if (!g_accessPointActive)
+    if (g_accessPointActive)
     {
-      WiFi.mode(WIFI_AP_STA);
-      startAccessPoint();
+      stopAccessPoint();
+    }
+
+    if (WiFi.getMode() != WIFI_MODE_STA)
+    {
+      WiFi.mode(WIFI_STA);
     }
   }
 
@@ -189,7 +194,6 @@ namespace
       Serial.println(F("[WiFi] Connection timed out, keeping access point active"));
       WiFi.disconnect(true);
       g_accessPointActive = false;
-      WiFi.mode(WIFI_AP_STA);
       startAccessPoint();
       g_state = WifiState::AccessPointOnly;
       g_lastReconnectAttempt = now;
@@ -200,8 +204,8 @@ namespace
   {
     if (!g_accessPointActive)
     {
-      WiFi.mode(g_hasCredentials ? WIFI_AP_STA : WIFI_AP);
       startAccessPoint();
+      return;
     }
 
     if (!g_hasCredentials)
@@ -216,14 +220,14 @@ namespace
     }
 
     g_lastReconnectAttempt = now;
+    stopAccessPoint();
     beginStationConnection();
   }
 
   void resetStationState()
   {
     WiFi.disconnect(true);
-    g_accessPointActive = false;
-    WiFi.mode(g_hasCredentials ? WIFI_AP_STA : WIFI_AP);
+    stopAccessPoint();
     if (!g_hasCredentials)
     {
       g_state = WifiState::AccessPointOnly;
@@ -256,21 +260,12 @@ void wifiManagerInitialize()
 
   if (g_hasCredentials)
   {
-    WiFi.mode(WIFI_AP_STA);
-  }
-  else
-  {
-    WiFi.mode(WIFI_AP);
-  }
-
-  startAccessPoint();
-
-  if (g_hasCredentials)
-  {
     beginStationConnection();
   }
   else
   {
+    WiFi.mode(WIFI_AP);
+    startAccessPoint();
     g_state = WifiState::AccessPointOnly;
   }
 
@@ -372,7 +367,6 @@ void wifiManagerEnsureAccessPoint()
 
   if (!g_accessPointActive)
   {
-    WiFi.mode(g_hasCredentials ? WIFI_AP_STA : WIFI_AP);
     startAccessPoint();
     g_state = WifiState::AccessPointOnly;
   }
