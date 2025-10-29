@@ -4,7 +4,6 @@
 
 #include <Arduino.h>
 #include <ArduinoJson.h>
-#include <WiFi.h>
 #include <WebServer.h>
 #include <WebSocketsServer.h>
 #include <cstring>
@@ -95,18 +94,8 @@ namespace
       return;
     }
 
-    IPAddress portalIp = status.accessPointIp;
-    if (!portalIp)
-    {
-      portalIp = WiFi.softAPIP();
-    }
-
-    String redirectUrl = String(F("http://"));
-    redirectUrl += portalIp.toString();
-    redirectUrl += '/';
-
     g_httpServer.sendHeader(F("Cache-Control"), F("no-cache, no-store, must-revalidate"));
-    g_httpServer.sendHeader(F("Location"), redirectUrl);
+    g_httpServer.sendHeader(F("Location"), F("/"));
     g_httpServer.send(302, F("text/plain"), F("Redirecting to captive portal"));
   }
 
