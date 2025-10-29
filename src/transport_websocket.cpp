@@ -372,7 +372,14 @@ void websocketTransportBegin(QueueHandle_t queue)
   WifiManagerStatus wifiStatus = wifiManagerGetStatus();
   if (!wifiStatus.connected)
   {
-    wifiManagerEnsureAccessPoint();
+    if (!wifiStatus.connecting)
+    {
+      wifiManagerEnsureAccessPoint();
+    }
+    else
+    {
+      Serial.println(F("[WS] Skipping access point start while station is connecting"));
+    }
     wifiStatus = wifiManagerGetStatus();
   }
 
