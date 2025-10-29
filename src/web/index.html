@@ -94,10 +94,40 @@
   <body>
     <header>
       <h1>BLE Bridge Control</h1>
-      <p>Send JSON commands to the device over WebSocket.</p>
-      <p>Status: <span id="status">Connecting…</span></p>
+      <p>Send JSON commands to the device over WebSocket or UART.</p>
+      <p>Status: <span id="status">Loading configuration…</span></p>
     </header>
     <main>
+      <section>
+        <h2>Connection Settings</h2>
+        <div style="display: grid; gap: 1rem; max-width: 420px;">
+          <div>
+            <p style="margin-bottom: 0.5rem; font-weight: 600;">Transport</p>
+            <label style="display: inline-flex; align-items: center; gap: 0.5rem; margin-right: 1.5rem;">
+              <input type="radio" name="transport" value="websocket" checked />
+              WebSocket
+            </label>
+            <label style="display: inline-flex; align-items: center; gap: 0.5rem;">
+              <input type="radio" name="transport" value="uart" />
+              UART
+            </label>
+          </div>
+          <label style="display: flex; flex-direction: column; gap: 0.5rem;">
+            <span style="font-weight: 600;">UART Baud Rate</span>
+            <input
+              type="number"
+              id="baud"
+              min="1200"
+              step="300"
+              value="115200"
+              style="padding: 0.5rem 0.75rem; border-radius: 10px; border: 1px solid rgba(148, 163, 184, 0.3); background: rgba(15, 23, 42, 0.7); color: inherit;"
+            />
+          </label>
+          <div>
+            <button id="save-settings">Save Settings</button>
+          </div>
+        </div>
+      </section>
       <section>
         <h2>Command</h2>
         <p>
@@ -123,12 +153,19 @@
       const commandEl = document.getElementById("command");
       const sendBtn = document.getElementById("send");
       const clearBtn = document.getElementById("clear");
+      const transportRadios = document.querySelectorAll('input[name="transport"]');
+      const baudInput = document.getElementById("baud");
+      const saveSettingsBtn = document.getElementById("save-settings");
 
       const wsProtocol = location.protocol === "https:" ? "wss" : "ws";
       const wsPort = 81;
       const wsUrl = `${wsProtocol}://${location.hostname}:${wsPort}/`;
 
       let socket;
+      let reconnectTimeout;
+      let shouldReconnect = false;
+      let desiredTransport = "websocket";
+      let desiredBaud = 115200;
 
       function appendLog(message, type = "info") {
         const entry = document.createElement("div");
@@ -138,19 +175,43 @@
         logEl.scrollTop = logEl.scrollHeight;
       }
 
-      function connect() {
+      function disconnectWebSocket() {
+        shouldReconnect = false;
+        if (reconnectTimeout) {
+          clearTimeout(reconnectTimeout);
+          reconnectTimeout = null;
+        }
+        if (socket) {
+          if (
+            socket.readyState === WebSocket.OPEN ||
+            socket.readyState === WebSocket.CONNECTING
+          ) {
+            socket.close();
+          }
+          socket = null;
+        }
+      }
+
+      function connectWebSocket() {
+        disconnectWebSocket();
+        shouldReconnect = true;
+        appendLog("Attempting WebSocket connection…", "system");
+        statusEl.textContent = "Connecting via WebSocket…";
+
         socket = new WebSocket(wsUrl);
-        statusEl.textContent = "Connecting…";
 
         socket.addEventListener("open", () => {
-          statusEl.textContent = "Connected";
+          statusEl.textContent = "Connected via WebSocket";
           appendLog("WebSocket connection established", "system");
         });
 
         socket.addEventListener("close", () => {
-          statusEl.textContent = "Disconnected";
-          appendLog("WebSocket disconnected", "system");
-          setTimeout(connect, 1000);
+          socket = null;
+          if (desiredTransport === "websocket" && shouldReconnect) {
+            statusEl.textContent = "Disconnected (WebSocket)";
+            appendLog("WebSocket disconnected, retrying…", "system");
+            reconnectTimeout = setTimeout(connectWebSocket, 1000);
+          }
         });
 
         socket.addEventListener("error", (event) => {
@@ -162,7 +223,36 @@
         });
       }
 
+      function activateUartMode() {
+        disconnectWebSocket();
+        statusEl.textContent = `UART mode active — connect at ${desiredBaud} baud.`;
+        appendLog(
+          `UART transport selected. Connect your host via serial at ${desiredBaud} baud.`,
+          "system"
+        );
+      }
+
+      function applyTransportChange() {
+        if (desiredTransport === "websocket") {
+          appendLog("Transport set to WebSocket", "system");
+          connectWebSocket();
+        } else {
+          appendLog(
+            `Transport set to UART (${desiredBaud} baud) — WebSocket disabled.`,
+            "system"
+          );
+          activateUartMode();
+        }
+      }
+
       sendBtn.addEventListener("click", () => {
+        if (desiredTransport !== "websocket") {
+          appendLog(
+            `UART mode is active. Send this command over your serial connection at ${desiredBaud} baud.`,
+            "system"
+          );
+          return;
+        }
         if (!socket || socket.readyState !== WebSocket.OPEN) {
           appendLog("WebSocket is not connected", "error");
           return;
@@ -180,7 +270,90 @@
         logEl.innerHTML = "";
       });
 
-      connect();
+      async function loadConfig() {
+        try {
+          const response = await fetch("/api/config");
+          if (!response.ok) {
+            throw new Error(`HTTP ${response.status}`);
+          }
+          const data = await response.json();
+          desiredTransport = data.transport === "uart" ? "uart" : "websocket";
+          desiredBaud = Number.parseInt(data.baud, 10) || 115200;
+
+          transportRadios.forEach((radio) => {
+            radio.checked = radio.value === desiredTransport;
+          });
+          baudInput.value = desiredBaud;
+
+          const transportDescription =
+            desiredTransport === "uart"
+              ? `UART (${desiredBaud} baud)`
+              : "WebSocket";
+
+          appendLog(`Configuration loaded: ${transportDescription}`, "system");
+          applyTransportChange();
+        } catch (error) {
+          appendLog(`Failed to load configuration: ${error.message}`, "error");
+          statusEl.textContent = "Using default WebSocket configuration";
+          desiredTransport = "websocket";
+          desiredBaud = Number.parseInt(baudInput.value, 10) || 115200;
+          transportRadios.forEach((radio) => {
+            radio.checked = radio.value === desiredTransport;
+          });
+          baudInput.value = desiredBaud;
+          applyTransportChange();
+        }
+      }
+
+      saveSettingsBtn.addEventListener("click", async () => {
+        const selectedTransport = Array.from(transportRadios).find(
+          (radio) => radio.checked
+        )?.value;
+        const baudValue = Number.parseInt(baudInput.value, 10);
+
+        if (!selectedTransport) {
+          appendLog("Please choose a transport option before saving.", "error");
+          return;
+        }
+
+        if (selectedTransport === "uart" && (!Number.isFinite(baudValue) || baudValue <= 0)) {
+          appendLog("Please enter a valid baud rate for UART mode.", "error");
+          return;
+        }
+
+        try {
+          const sanitizedBaud =
+            Number.isFinite(baudValue) && baudValue > 0 ? baudValue : desiredBaud;
+          baudInput.value = sanitizedBaud;
+
+          const payload = {
+            transport: selectedTransport,
+            baud: sanitizedBaud,
+          };
+
+          const response = await fetch("/api/config", {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify(payload),
+          });
+
+          if (!response.ok) {
+            throw new Error(`HTTP ${response.status}`);
+          }
+
+          desiredTransport = payload.transport;
+          desiredBaud = sanitizedBaud;
+
+          appendLog("Configuration saved.", "system");
+          applyTransportChange();
+        } catch (error) {
+          appendLog(`Failed to save configuration: ${error.message}`, "error");
+        }
+      });
+
+      loadConfig();
     </script>
   </body>
 
