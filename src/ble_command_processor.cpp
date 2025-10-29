@@ -1056,9 +1056,13 @@ namespace
 void BleCommandProcessor::begin()
 {
   const String bleName = getEffectiveBleDeviceName();
-  const String bleManufacturer = getEffectiveBleDeviceManufacturer();
   Keyboard.deviceName = bleName.c_str();
-  Keyboard.deviceManufacturer = bleManufacturer.c_str();
+
+  const DeviceConfig &config = getDeviceConfig();
+  if (config.hasBleManufacturerName && config.bleManufacturerName.length() > 0)
+  {
+    Keyboard.deviceManufacturer = config.bleManufacturerName.c_str();
+  }
   Keyboard.begin();
   Mouse.begin();
   lastBleConnectionState = Keyboard.isConnected();

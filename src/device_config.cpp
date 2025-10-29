@@ -1,6 +1,7 @@
 #include "device_config.h"
 
 #include <Preferences.h>
+#include <BleCombo.h>
 
 namespace
 {
@@ -13,7 +14,6 @@ namespace
   const char *const TRANSPORT_WEBSOCKET = "websocket";
   const char *const KEY_BLE_NAME = "bleName";
   const char *const KEY_BLE_MANUFACTURER = "bleManuf";
-  const char *const DEFAULT_BLE_MANUFACTURER = "BlynkGO Solution";
 
   constexpr uint32_t SUPPORTED_BAUD_RATES[] = {
       9600,
@@ -232,5 +232,5 @@ String getEffectiveBleDeviceManufacturer()
   {
     return config.bleManufacturerName;
   }
-  return String(DEFAULT_BLE_MANUFACTURER);
+  return String(Keyboard.deviceManufacturer.c_str());
 }
