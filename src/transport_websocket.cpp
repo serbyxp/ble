@@ -109,6 +109,7 @@ namespace
       return false;
     }
 
+    stopAccessPoint();
     WiFi.mode(WIFI_STA);
     WiFi.disconnect(false, false);
     WiFi.setAutoReconnect(true);
