@@ -96,7 +96,8 @@ private:
   BLECharacteristic* inputKeyboard;
   BLECharacteristic* outputKeyboard;
   BLECharacteristic* inputMediaKeys;
-  
+  TaskHandle_t serverTaskHandle;
+
   KeyReport _keyReport;
   MediaKeyReport _mediaKeyReport;
   static void taskServer(void* pvParameter);
