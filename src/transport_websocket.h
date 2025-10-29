@@ -1,6 +1,6 @@
 #pragma once
 
-#include <Arduino.h>
+#include <WString.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/queue.h>
 
