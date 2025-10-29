@@ -34,7 +34,6 @@ namespace
     }
 
     size_t allowedLength = (maxLength > 0) ? maxLength : MAX_STORED_STRING_LENGTH;
-    size_t allowedBytes = allowedLength + 1;
 
     auto rewriteStoredValue = [&](const String &newValue) {
       Preferences migrator;
@@ -54,67 +53,35 @@ namespace
       migrator.end();
     };
 
-    auto readLegacyString = [&](String &outValue) -> bool {
-      if (prefs.getType(key) != PT_STR)
+    auto sanitizeValue = [&](String &value, bool &needsRewrite) {
+      if (allowedLength > 0 && value.length() > allowedLength)
       {
-        return false;
+        value.remove(allowedLength);
+        needsRewrite = true;
       }
-
-      size_t requiredLength = prefs.getString(key, nullptr, 0);
-      size_t bufferLength = requiredLength + 1;
-      if (bufferLength == 0)
-      {
-        return false;
-      }
-
-      std::unique_ptr<char[]> buffer(new (std::nothrow) char[bufferLength]);
-      if (!buffer)
-      {
-        return false;
-      }
-
-      size_t readLength = prefs.getString(key, buffer.get(), bufferLength);
-      if (readLength == 0 && requiredLength > 0)
-      {
-        return false;
-      }
-
-      if (readLength >= bufferLength)
-      {
-        readLength = bufferLength - 1;
-      }
-
-      buffer[readLength] = '\0';
-      outValue = String(buffer.get());
-
-      if (allowedLength > 0 && outValue.length() > allowedLength)
-      {
-        outValue.remove(allowedLength);
-      }
-
-      rewriteStoredValue(outValue);
-      return true;
     };
+
+    uint8_t prefType = prefs.getType(key);
+    if (prefType == PT_STR)
+    {
+      String value = prefs.getString(key, "");
+      bool needsRewrite = false;
+      sanitizeValue(value, needsRewrite);
+      if (needsRewrite)
+      {
+        rewriteStoredValue(value);
+      }
+      return value;
+    }
+
+    if (prefType != PT_BLOB)
+    {
+      return String();
+    }
 
     size_t storedLength = prefs.getBytesLength(key);
     if (storedLength == 0)
     {
-      String legacyValue;
-      if (readLegacyString(legacyValue))
-      {
-        return legacyValue;
-      }
-      return String();
-    }
-
-    if (storedLength > allowedBytes)
-    {
-      String legacyValue;
-      if (readLegacyString(legacyValue))
-      {
-        return legacyValue;
-      }
-
       rewriteStoredValue(String());
       return String();
     }
@@ -129,11 +96,7 @@ namespace
     size_t read = prefs.getBytes(key, buffer.get(), storedLength);
     if (read == 0)
     {
-      String legacyValue;
-      if (readLegacyString(legacyValue))
-      {
-        return legacyValue;
-      }
+      rewriteStoredValue(String());
       return String();
     }
 
@@ -144,7 +107,7 @@ namespace
     buffer[read] = '\0';
 
     String value(buffer.get());
-    bool needsRewrite = false;
+    bool needsRewrite = true;
 
     if (read < storedLength)
     {
@@ -155,11 +118,7 @@ namespace
       needsRewrite = true;
     }
 
-    if (value.length() > allowedLength)
-    {
-      value.remove(allowedLength);
-      needsRewrite = true;
-    }
+    sanitizeValue(value, needsRewrite);
 
     if (needsRewrite)
     {
@@ -176,9 +135,8 @@ namespace
       return false;
     }
 
-    size_t bytesToWrite = value.length() + 1;
-    size_t written = prefs.putBytes(key, value.c_str(), bytesToWrite);
-    return written == bytesToWrite;
+    size_t written = prefs.putString(key, value);
+    return written > 0;
   }
 
   constexpr uint32_t SUPPORTED_BAUD_RATES[] = {
