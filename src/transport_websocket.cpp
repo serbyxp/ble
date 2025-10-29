@@ -111,7 +111,7 @@ namespace
 
     stopAccessPoint();
     WiFi.mode(WIFI_STA);
-    WiFi.disconnect(true, true);
+    WiFi.disconnect(false, true);
     WiFi.setAutoReconnect(true);
 
     const char *password = config.wifi.password.length() > 0 ? config.wifi.password.c_str() : nullptr;
