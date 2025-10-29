@@ -89,19 +89,26 @@ bool loadDeviceConfig()
 {
   if (!g_preferences.begin(NAMESPACE, true))
   {
-    esp_err_t lastError = g_preferences.lastError();
-    if (lastError != ESP_ERR_NVS_NOT_FOUND)
+    nvs_handle_t handle = 0;
+    esp_err_t err = nvs_open(NAMESPACE, NVS_READONLY, &handle);
+    if (err == ESP_OK)
+    {
+      nvs_close(handle);
+      return false;
+    }
+    if (err != ESP_ERR_NVS_NOT_FOUND)
     {
       return false;
     }
 
-    if (!g_preferences.begin(NAMESPACE, false))
+    err = nvs_open(NAMESPACE, NVS_READWRITE, &handle);
+    if (err != ESP_OK)
     {
       return false;
     }
 
     Serial.printf("[CFG] Initialized preferences namespace '%s' on first boot.\n", NAMESPACE);
-    g_preferences.end();
+    nvs_close(handle);
 
     if (!g_preferences.begin(NAMESPACE, true))
     {
