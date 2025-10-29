@@ -111,12 +111,26 @@ namespace
 
     stopAccessPoint();
     WiFi.mode(WIFI_STA);
-    WiFi.disconnect(false, false);
+    WiFi.disconnect(true, true);
     WiFi.setAutoReconnect(true);
-    WiFi.begin(config.wifi.ssid.c_str(), config.wifi.password.c_str());
+
+    const char *password = config.wifi.password.length() > 0 ? config.wifi.password.c_str() : nullptr;
+    WiFi.begin(config.wifi.ssid.c_str(), password);
     g_lastConnectionAttempt = millis();
     g_staConnected = false;
     Serial.printf("[WS] Connecting to WiFi SSID: %s\n", config.wifi.ssid.c_str());
+
+    wl_status_t waitResult = WiFi.waitForConnectResult(WIFI_AP_START_DELAY_MS);
+    if (waitResult != WL_CONNECTED)
+    {
+      Serial.printf("[WS] WiFi connection failed (status=%d)\n", static_cast<int>(waitResult));
+      // Allow the main loop to immediately fall back to AP mode.
+      if (g_lastConnectionAttempt != 0)
+      {
+        g_lastConnectionAttempt = millis() - WIFI_AP_START_DELAY_MS;
+      }
+    }
+
     return true;
   }
 
