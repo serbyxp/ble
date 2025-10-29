@@ -90,11 +90,11 @@ typedef struct
 class BleComboKeyboard : public Print
 {
 private:
-  BleConnectionStatus *connectionStatus;
-  BLEHIDDevice *hid;
-  BLECharacteristic *inputKeyboard;
-  BLECharacteristic *outputKeyboard;
-  BLECharacteristic *inputMediaKeys;
+  BleConnectionStatus* connectionStatus;
+  BLEHIDDevice* hid;
+  BLECharacteristic* inputKeyboard;
+  BLECharacteristic* outputKeyboard;
+  BLECharacteristic* inputMediaKeys;
   TaskHandle_t serverTaskHandle;
 
   KeyReport _keyReport;

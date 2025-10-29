@@ -1156,14 +1156,7 @@ void BleCommandProcessor::applyIdentityFromConfig()
   bool wasConnected = Keyboard.isConnected();
 
   Keyboard.end();
-  delay(10);
-
-  TaskHandle_t existingServerTask = xTaskGetHandle("server");
-  if (existingServerTask != nullptr)
-  {
-    vTaskDelete(existingServerTask);
-    vTaskDelay(pdMS_TO_TICKS(10));
-  }
+  vTaskDelay(pdMS_TO_TICKS(10));
 
   BLEDevice::deinit(true);
   vTaskDelay(pdMS_TO_TICKS(10));
