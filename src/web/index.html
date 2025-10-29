@@ -95,6 +95,10 @@
         color: rgba(226, 232, 240, 0.7);
       }
 
+      .hint.warning {
+        color: rgba(248, 113, 113, 0.9);
+      }
+
       label span {
         font-weight: 600;
       }
@@ -257,6 +261,9 @@
           <select id="uart-baud" disabled></select>
         </div>
         <p class="hint">Changes are saved immediately in NVS.</p>
+        <p class="hint warning">
+          If the device reports "Failed to persist configuration...", retry the request or power-cycle the bridge.
+        </p>
       </section>
       <section>
         <h2>WiFi Configuration</h2>
@@ -368,6 +375,45 @@
       let bleUsingDefaultManufacturer = true;
       let currentBleName = "";
       let currentBleManufacturer = "";
+
+      async function extractErrorMessage(response) {
+        const fallback = `${response.status} ${response.statusText}`;
+        let text = "";
+        try {
+          text = await response.text();
+        } catch (error) {
+          return fallback;
+        }
+        if (!text) {
+          return fallback;
+        }
+        try {
+          const data = JSON.parse(text);
+          if (data && typeof data.message === "string") {
+            return data.message;
+          }
+          if (typeof data === "string") {
+            return data;
+          }
+        } catch (error) {
+          // Ignore JSON parse errors and fall back to raw text
+        }
+        return text;
+      }
+
+      async function postConfig(body, contextMessage) {
+        const response = await fetch("/api/config", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(body)
+        });
+        if (!response.ok) {
+          const detail = await extractErrorMessage(response);
+          const prefix = contextMessage ? `${contextMessage}: ` : "";
+          throw new Error(`${prefix}${detail}`);
+        }
+        return response.json();
+      }
 
       function appendLog(message, type = "info") {
         const entry = document.createElement("div");
@@ -483,14 +529,7 @@
           });
         }
         try {
-          const response = await fetch("/api/config", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ transport })
-          });
-          if (!response.ok) {
-            throw new Error(`Failed to update transport: ${response.status}`);
-          }
+          await postConfig({ transport }, "Failed to update transport");
           currentTransport = transport;
           updateBaudControlState();
           await loadConfig();
@@ -506,14 +545,7 @@
 
       async function updateBaudRate(baud) {
         try {
-          const response = await fetch("/api/config", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ uart: { baud } })
-          });
-          if (!response.ok) {
-            throw new Error(`Failed to update baud rate: ${response.status}`);
-          }
+          await postConfig({ uart: { baud } }, "Failed to update baud rate");
           currentBaudRate = baud;
           await loadConfig();
         } catch (error) {
@@ -535,14 +567,7 @@
         }
 
         try {
-          const response = await fetch("/api/config", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify(payload)
-          });
-          if (!response.ok) {
-            throw new Error(`Failed to update BLE identity: ${response.status}`);
-          }
+          await postConfig(payload, "Failed to update BLE identity");
           await loadConfig();
         } catch (error) {
           appendLog(error.message, "error");
@@ -595,14 +620,7 @@
         const password = wifiPasswordInput.value;
         const body = { wifi: { ssid, password } };
         try {
-          const response = await fetch("/api/config", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify(body)
-          });
-          if (!response.ok) {
-            throw new Error(`Failed to save WiFi: ${response.status}`);
-          }
+          await postConfig(body, "Failed to save WiFi");
           wifiPasswordInput.value = "";
           await loadConfig();
         } catch (error) {
@@ -612,14 +630,7 @@
 
       async function forgetWifi() {
         try {
-          const response = await fetch("/api/config", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ wifi: { forget: true } })
-          });
-          if (!response.ok) {
-            throw new Error(`Failed to forget WiFi: ${response.status}`);
-          }
+          await postConfig({ wifi: { forget: true } }, "Failed to forget WiFi");
           wifiSsidInput.value = "";
           wifiPasswordInput.value = "";
           await loadConfig();
@@ -632,7 +643,8 @@
         try {
           const response = await fetch("/api/config");
           if (!response.ok) {
-            throw new Error(`Config request failed: ${response.status}`);
+            const detail = await extractErrorMessage(response);
+            throw new Error(`Config request failed: ${detail}`);
           }
           const data = await response.json();
           currentTransport = data.transport || "websocket";

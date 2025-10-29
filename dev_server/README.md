@@ -42,6 +42,8 @@ Once the server is running, open <http://127.0.0.1:8000/> in your browser. The p
 
 If the ESP32 is not yet in range or paired, the UI will still load; once the device is ready, use the Connect form to reopen the serial port.
 
+If the firmware cannot persist a configuration change, `/api/config` responds with a JSON error such as "Failed to persist configuration. Please retry or power-cycle the device." The UI surfaces this message so you can retry or cycle power before continuing.
+
 ### Customising behaviour
 
 - **Character delay** – slow down typing if the host drops characters.
