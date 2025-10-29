@@ -92,6 +92,48 @@
         box-shadow: none;
       }
 
+      .wifi-network-list {
+        display: flex;
+        flex-direction: column;
+        gap: 0.5rem;
+      }
+
+      .wifi-network {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        gap: 1rem;
+        width: 100%;
+        padding: 0.65rem 0.9rem;
+        border-radius: 10px;
+        border: 1px solid rgba(148, 163, 184, 0.35);
+        background: rgba(15, 23, 42, 0.65);
+        color: inherit;
+        cursor: pointer;
+        transition: background 0.15s ease, transform 0.1s ease;
+      }
+
+      .wifi-network:hover:not(:disabled) {
+        background: rgba(30, 41, 59, 0.8);
+        transform: translateY(-1px);
+      }
+
+      .wifi-network:disabled {
+        opacity: 0.6;
+        cursor: not-allowed;
+      }
+
+      .wifi-network .ssid {
+        font-weight: 600;
+      }
+
+      .wifi-network .details {
+        font-size: 0.85rem;
+        opacity: 0.85;
+        display: flex;
+        gap: 0.75rem;
+      }
+
       #status {
         font-weight: 600;
       }
@@ -169,7 +211,12 @@
           <div style="display: flex; gap: 1rem; flex-wrap: wrap;">
             <button id="save-wifi">Save Wi-Fi</button>
             <button id="forget-wifi" class="button-secondary">Forget Wi-Fi</button>
+            <button id="scan-wifi" type="button" class="button-secondary">Scan for Networks</button>
           </div>
+          <div id="wifi-scan-status" class="status">
+            Tap “Scan for Networks” to discover nearby Wi-Fi.
+          </div>
+          <div id="wifi-networks" class="wifi-network-list"></div>
         </div>
       </section>
       <section>
@@ -205,6 +252,9 @@
       const wifiPasswordInput = document.getElementById("wifi-password");
       const saveWifiBtn = document.getElementById("save-wifi");
       const forgetWifiBtn = document.getElementById("forget-wifi");
+      const wifiScanBtn = document.getElementById("scan-wifi");
+      const wifiScanStatus = document.getElementById("wifi-scan-status");
+      const wifiNetworksList = document.getElementById("wifi-networks");
 
       const wsProtocol = location.protocol === "https:" ? "wss" : "ws";
       const wsPort = 81;
@@ -342,6 +392,82 @@
         } catch (error) {
           wifiStatusText.textContent = `Failed to load Wi-Fi status: ${error.message}`;
           forgetWifiBtn.disabled = true;
+        }
+      }
+
+      function renderWifiNetworks(networks) {
+        wifiNetworksList.innerHTML = "";
+
+        if (!Array.isArray(networks) || networks.length === 0) {
+          wifiScanStatus.textContent = "No networks found. Try scanning again closer to your router.";
+          return;
+        }
+
+        wifiScanStatus.textContent = `Found ${networks.length} network${networks.length === 1 ? "" : "s"}. Tap one to fill the SSID.`;
+
+        networks.forEach((network) => {
+          const button = document.createElement("button");
+          button.type = "button";
+          button.className = "wifi-network";
+
+          const ssid = typeof network.ssid === "string" && network.ssid.length ? network.ssid : "Hidden network";
+          const ssidSpan = document.createElement("span");
+          ssidSpan.className = "ssid";
+          ssidSpan.textContent = ssid;
+
+          const detailsSpan = document.createElement("span");
+          detailsSpan.className = "details";
+          const rssi = typeof network.rssi === "number" ? `${network.rssi} dBm` : "Unknown signal";
+          const security = network.secure ? "🔒 Secured" : "🔓 Open";
+          detailsSpan.textContent = `${security} · ${rssi}`;
+
+          button.appendChild(ssidSpan);
+          button.appendChild(detailsSpan);
+
+          if (typeof network.hidden === "boolean" && network.hidden && (!network.ssid || !network.ssid.length)) {
+            button.disabled = true;
+            button.title = "Hidden networks cannot populate the SSID automatically.";
+          } else {
+            button.addEventListener("click", () => {
+              wifiSsidInput.value = network.ssid || "";
+              wifiPasswordInput.value = "";
+              wifiPasswordInput.focus();
+            });
+          }
+
+          wifiNetworksList.appendChild(button);
+        });
+      }
+
+      async function scanForWifiNetworks() {
+        if (!wifiScanBtn) {
+          return;
+        }
+
+        wifiScanBtn.disabled = true;
+        const originalText = wifiScanBtn.textContent;
+        wifiScanBtn.textContent = "Scanning…";
+        wifiScanStatus.textContent = "Scanning for nearby networks…";
+        wifiNetworksList.innerHTML = "";
+
+        try {
+          const response = await fetch("/api/wifi/scan");
+          if (!response.ok) {
+            throw new Error(`HTTP ${response.status}`);
+          }
+          const data = await response.json();
+          const networks = Array.isArray(data.networks) ? data.networks : [];
+          networks.sort((a, b) => {
+            const rssiA = a && typeof a.rssi === "number" ? a.rssi : -1000;
+            const rssiB = b && typeof b.rssi === "number" ? b.rssi : -1000;
+            return rssiB - rssiA;
+          });
+          renderWifiNetworks(networks);
+        } catch (error) {
+          wifiScanStatus.textContent = `Failed to scan networks: ${error.message}`;
+        } finally {
+          wifiScanBtn.disabled = false;
+          wifiScanBtn.textContent = originalText || "Scan for Networks";
         }
       }
 
@@ -511,6 +637,12 @@
           wifiPasswordInput.value = "";
         }
       });
+
+      if (wifiScanBtn) {
+        wifiScanBtn.addEventListener("click", () => {
+          scanForWifiNetworks();
+        });
+      }
 
       loadConfig();
       fetchWifiStatus();

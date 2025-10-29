@@ -83,6 +83,23 @@ namespace
     g_httpServer.send_P(200, "text/html", INDEX_HTML);
   }
 
+  void sendCaptivePortalPage()
+  {
+    WifiManagerStatus status = wifiManagerGetStatus();
+    if (!status.accessPointActive)
+    {
+      sendErrorResponse(404, "Not found");
+      return;
+    }
+
+    static const char RESPONSE[] PROGMEM =
+        "<!DOCTYPE html><html><head><meta charset=\"utf-8\"><meta http-equiv=\"refresh\" content=\"0;url=/\">"
+        "<title>Captive Portal</title></head><body>Redirecting…</body></html>";
+
+    g_httpServer.sendHeader("Cache-Control", "no-cache, no-store, must-revalidate");
+    g_httpServer.send_P(200, "text/html", RESPONSE);
+  }
+
   void sendCorsHeaders()
   {
     g_httpServer.sendHeader("Access-Control-Allow-Origin", "*");
@@ -214,6 +231,25 @@ namespace
     sendWifiStatusResponse();
   }
 
+  void handleWifiScanGet()
+  {
+    std::vector<WifiScanResult> networks = wifiManagerScanNetworks();
+    size_t capacity = JSON_OBJECT_SIZE(3) + JSON_ARRAY_SIZE(networks.size()) + networks.size() * JSON_OBJECT_SIZE(4) + 64;
+    DynamicJsonDocument doc(capacity);
+    doc["status"] = "ok";
+    doc["count"] = static_cast<uint32_t>(networks.size());
+    JsonArray array = doc.createNestedArray("networks");
+    for (const WifiScanResult &network : networks)
+    {
+      JsonObject entry = array.createNestedObject();
+      entry["ssid"] = network.ssid;
+      entry["rssi"] = network.rssi;
+      entry["secure"] = network.secure;
+      entry["hidden"] = network.hidden;
+    }
+    sendJsonDocument(200, doc);
+  }
+
   void handleWifiPost()
   {
     if (!g_httpServer.hasArg("plain"))
@@ -284,6 +320,22 @@ namespace
     g_httpServer.send(204, "text/plain", "");
   }
 
+  void handleCaptivePortalRequest()
+  {
+    sendCaptivePortalPage();
+  }
+
+  void handleNotFound()
+  {
+    if (wifiManagerGetStatus().accessPointActive)
+    {
+      sendCaptivePortalPage();
+      return;
+    }
+
+    sendErrorResponse(404, "Not found");
+  }
+
 } // namespace
 
 void websocketTransportBegin(QueueHandle_t queue)
@@ -325,6 +377,13 @@ void websocketTransportBegin(QueueHandle_t queue)
     g_httpServer.on("/api/wifi", HTTP_GET, handleWifiGet);
     g_httpServer.on("/api/wifi", HTTP_POST, handleWifiPost);
     g_httpServer.on("/api/wifi", HTTP_OPTIONS, handleWifiOptions);
+    g_httpServer.on("/api/wifi/scan", HTTP_GET, handleWifiScanGet);
+    g_httpServer.on("/api/wifi/scan", HTTP_OPTIONS, handleWifiOptions);
+    g_httpServer.on("/generate_204", HTTP_GET, handleCaptivePortalRequest);
+    g_httpServer.on("/gen_204", HTTP_GET, handleCaptivePortalRequest);
+    g_httpServer.on("/hotspot-detect.html", HTTP_GET, handleCaptivePortalRequest);
+    g_httpServer.on("/connecttest.txt", HTTP_GET, handleCaptivePortalRequest);
+    g_httpServer.onNotFound(handleNotFound);
     g_handlersRegistered = true;
   }
 
