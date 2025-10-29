@@ -281,6 +281,35 @@
           <ul id="networks"></ul>
         </div>
       </section>
+      <section>
+        <h2>Bluetooth Identity</h2>
+        <p class="hint">
+          Set the BLE device name and manufacturer shown during pairing. Leave the name blank to match the WiFi SSID and the
+          manufacturer blank to use the built-in default label.
+        </p>
+        <form id="ble-form" autocomplete="off">
+          <label>
+            Device Name
+            <input id="ble-name" type="text" name="name" placeholder="Defaults to WiFi SSID" maxlength="30" />
+          </label>
+          <label>
+            Manufacturer
+            <input
+              id="ble-manufacturer"
+              type="text"
+              name="manufacturer"
+              placeholder="Defaults to built-in manufacturer"
+              maxlength="30"
+            />
+          </label>
+          <div class="actions">
+            <button type="submit">Save Identity</button>
+            <button type="button" id="ble-reset">Use Defaults</button>
+          </div>
+        </form>
+        <p class="hint">Current broadcast name: <span id="ble-effective-name">Loading…</span></p>
+        <p class="hint">Current manufacturer: <span id="ble-effective-manufacturer">Loading…</span></p>
+      </section>
       <section id="command-section">
         <h2>Command</h2>
         <p class="hint">
@@ -316,6 +345,12 @@
       const wifiScanButton = document.getElementById("wifi-scan");
       const networksList = document.getElementById("networks");
       const scanResults = document.getElementById("scan-results");
+      const bleForm = document.getElementById("ble-form");
+      const bleNameInput = document.getElementById("ble-name");
+      const bleManufacturerInput = document.getElementById("ble-manufacturer");
+      const bleResetButton = document.getElementById("ble-reset");
+      const bleEffectiveName = document.getElementById("ble-effective-name");
+      const bleEffectiveManufacturer = document.getElementById("ble-effective-manufacturer");
       const commandSection = document.getElementById("command-section");
       const logSection = document.getElementById("log-section");
       const statusEl = document.getElementById("status");
@@ -329,6 +364,10 @@
       let currentBaudRate = UART_BAUD_DEFAULT;
       let socket = null;
       let reconnectTimer = null;
+      let bleUsingDefaultName = true;
+      let bleUsingDefaultManufacturer = true;
+      let currentBleName = "";
+      let currentBleManufacturer = "";
 
       function appendLog(message, type = "info") {
         const entry = document.createElement("div");
@@ -483,6 +522,35 @@
         }
       }
 
+      async function updateBleIdentity({ name, manufacturer }) {
+        const payload = { ble: {} };
+        if (typeof name === "string") {
+          payload.ble.name = name;
+        }
+        if (typeof manufacturer === "string") {
+          payload.ble.manufacturer = manufacturer;
+        }
+        if (Object.keys(payload.ble).length === 0) {
+          return;
+        }
+
+        try {
+          const response = await fetch("/api/config", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(payload)
+          });
+          if (!response.ok) {
+            throw new Error(`Failed to update BLE identity: ${response.status}`);
+          }
+          await loadConfig();
+        } catch (error) {
+          appendLog(error.message, "error");
+          bleNameInput.value = currentBleName;
+          bleManufacturerInput.value = currentBleManufacturer;
+        }
+      }
+
       function renderNetworks(networks) {
         networksList.innerHTML = "";
         if (!networks || networks.length === 0) {
@@ -596,12 +664,46 @@
             }
           }
 
+          if (data.ble) {
+            const defaultNameFlag = data.ble.usingDefaultName;
+            const defaultManufacturerFlag = data.ble.usingDefaultManufacturer;
+            bleUsingDefaultName = typeof defaultNameFlag === "boolean" ? defaultNameFlag : Boolean(data.ble.usingDefault);
+            bleUsingDefaultManufacturer =
+              typeof defaultManufacturerFlag === "boolean" ? defaultManufacturerFlag : Boolean(data.ble.usingDefault);
+
+            currentBleName = typeof data.ble.name === "string" && !bleUsingDefaultName ? data.ble.name : "";
+            currentBleManufacturer =
+              typeof data.ble.manufacturer === "string" && !bleUsingDefaultManufacturer ? data.ble.manufacturer : "";
+
+            bleNameInput.value = currentBleName;
+            bleManufacturerInput.value = currentBleManufacturer;
+            bleEffectiveName.textContent = data.ble.effectiveName || "(unknown)";
+            bleEffectiveManufacturer.textContent = data.ble.effectiveManufacturer || "(unknown)";
+          } else {
+            bleUsingDefaultName = true;
+            bleUsingDefaultManufacturer = true;
+            currentBleName = "";
+            currentBleManufacturer = "";
+            bleNameInput.value = "";
+            bleManufacturerInput.value = "";
+            bleEffectiveName.textContent = "(unknown)";
+            bleEffectiveManufacturer.textContent = "(unknown)";
+          }
+
           ensureSocket();
         } catch (error) {
           transportStatusEl.textContent = "Unavailable";
           wifiStatusEl.textContent = "Unavailable";
           apStatusEl.textContent = "Unavailable";
           baudSelect.disabled = true;
+          bleEffectiveName.textContent = "Unavailable";
+          bleEffectiveManufacturer.textContent = "Unavailable";
+          bleUsingDefaultName = true;
+          bleUsingDefaultManufacturer = true;
+          currentBleName = "";
+          currentBleManufacturer = "";
+          bleNameInput.value = "";
+          bleManufacturerInput.value = "";
           appendLog(error.message, "error");
         }
       }
@@ -634,6 +736,17 @@
       wifiForm.addEventListener("submit", saveWifi);
       wifiForgetButton.addEventListener("click", forgetWifi);
       wifiScanButton.addEventListener("click", scanNetworks);
+      bleForm.addEventListener("submit", (event) => {
+        event.preventDefault();
+        const nameValue = bleNameInput.value.trim();
+        const manufacturerValue = bleManufacturerInput.value.trim();
+        updateBleIdentity({ name: nameValue, manufacturer: manufacturerValue });
+      });
+      bleResetButton.addEventListener("click", () => {
+        bleNameInput.value = "";
+        bleManufacturerInput.value = "";
+        updateBleIdentity({ name: "", manufacturer: "" });
+      });
 
       sendBtn.addEventListener("click", () => {
         if (currentTransport !== "websocket") {

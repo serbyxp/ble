@@ -1,4 +1,6 @@
 #include "ble_command_processor.h"
+#include "device_config.h"
+#include "transport_websocket.h"
 
 #include <Arduino.h>
 #include <ArduinoJson.h>
@@ -6,8 +8,6 @@
 
 #include <stdlib.h>
 #include <strings.h>
-
-#include "transport_websocket.h"
 
 namespace
 {
@@ -1055,6 +1055,10 @@ namespace
 
 void BleCommandProcessor::begin()
 {
+  const String bleName = getEffectiveBleDeviceName();
+  const String bleManufacturer = getEffectiveBleDeviceManufacturer();
+  Keyboard.deviceName = bleName.c_str();
+  Keyboard.deviceManufacturer = bleManufacturer.c_str();
   Keyboard.begin();
   Mouse.begin();
   lastBleConnectionState = Keyboard.isConnected();

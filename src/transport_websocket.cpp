@@ -145,6 +145,15 @@ namespace
     wifi["apActive"] = g_apActive;
     wifi["portalUrl"] = g_apActive ? String("http://") + g_apIp.toString() + "/" : "";
 
+    JsonObject ble = doc["ble"].to<JsonObject>();
+    ble["name"] = config.hasBleDeviceName ? config.bleDeviceName : "";
+    ble["manufacturer"] = config.hasBleManufacturerName ? config.bleManufacturerName : "";
+    ble["usingDefaultName"] = !config.hasBleDeviceName;
+    ble["usingDefaultManufacturer"] = !config.hasBleManufacturerName;
+    ble["usingDefault"] = !config.hasBleDeviceName && !config.hasBleManufacturerName;
+    ble["effectiveName"] = getEffectiveBleDeviceName();
+    ble["effectiveManufacturer"] = getEffectiveBleDeviceManufacturer();
+
     String response;
     serializeJson(doc, response);
     g_httpServer.send(200, "application/json", response);
@@ -291,6 +300,68 @@ namespace
             configChanged = true;
             wifiChanged = true;
           }
+        }
+      }
+    }
+
+    if (!doc["ble"].isNull())
+    {
+      JsonObject ble = doc["ble"].as<JsonObject>();
+      JsonVariant nameVariant = ble["name"];
+      if (!nameVariant.isNull())
+      {
+        if (!nameVariant.is<const char *>() && !nameVariant.is<String>())
+        {
+          respondError(400, "Invalid BLE name");
+          return;
+        }
+        const char *rawName = nameVariant.as<const char *>();
+        String newName = rawName != nullptr ? String(rawName) : String();
+        newName.trim();
+
+        if (newName.length() == 0)
+        {
+          if (config.hasBleDeviceName || config.bleDeviceName.length() > 0)
+          {
+            config.bleDeviceName = "";
+            config.hasBleDeviceName = false;
+            configChanged = true;
+          }
+        }
+        else if (!config.hasBleDeviceName || config.bleDeviceName != newName)
+        {
+          config.bleDeviceName = newName;
+          config.hasBleDeviceName = true;
+          configChanged = true;
+        }
+      }
+
+      JsonVariant manufacturerVariant = ble["manufacturer"];
+      if (!manufacturerVariant.isNull())
+      {
+        if (!manufacturerVariant.is<const char *>() && !manufacturerVariant.is<String>())
+        {
+          respondError(400, "Invalid BLE manufacturer");
+          return;
+        }
+        const char *rawManufacturer = manufacturerVariant.as<const char *>();
+        String newManufacturer = rawManufacturer != nullptr ? String(rawManufacturer) : String();
+        newManufacturer.trim();
+
+        if (newManufacturer.length() == 0)
+        {
+          if (config.hasBleManufacturerName || config.bleManufacturerName.length() > 0)
+          {
+            config.bleManufacturerName = "";
+            config.hasBleManufacturerName = false;
+            configChanged = true;
+          }
+        }
+        else if (!config.hasBleManufacturerName || config.bleManufacturerName != newManufacturer)
+        {
+          config.bleManufacturerName = newManufacturer;
+          config.hasBleManufacturerName = true;
+          configChanged = true;
         }
       }
     }
