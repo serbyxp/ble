@@ -5,6 +5,8 @@
 #include <BleCombo.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/portmacro.h>
+#include <memory>
+#include <new>
 
 namespace
 {
@@ -19,6 +21,69 @@ namespace
   const char *const TRANSPORT_WEBSOCKET = "websocket";
   const char *const KEY_BLE_NAME = "bleName";
   const char *const KEY_BLE_MANUFACTURER = "bleManuf";
+
+  constexpr size_t MAX_STORED_STRING_LENGTH = 256;
+
+  String readPreferenceString(Preferences &prefs, const char *key, size_t maxLength = 0)
+  {
+    if (!prefs.isKey(key))
+    {
+      return String();
+    }
+
+    size_t storedLength = prefs.getBytesLength(key);
+    if (storedLength == 0)
+    {
+      return String();
+    }
+
+    if (maxLength > 0 && storedLength > (maxLength + 1))
+    {
+      return String();
+    }
+
+    size_t copyLength = storedLength;
+    if (maxLength > 0 && copyLength > maxLength)
+    {
+      copyLength = maxLength;
+    }
+    else if (maxLength == 0 && copyLength > MAX_STORED_STRING_LENGTH)
+    {
+      copyLength = MAX_STORED_STRING_LENGTH;
+    }
+
+    std::unique_ptr<char[]> buffer(new (std::nothrow) char[copyLength + 1]);
+    if (!buffer)
+    {
+      return String();
+    }
+
+    size_t read = prefs.getBytes(key, buffer.get(), copyLength);
+    if (read == 0)
+    {
+      return String();
+    }
+
+    if (read > copyLength)
+    {
+      read = copyLength;
+    }
+
+    buffer[read] = '\0';
+    return String(buffer.get());
+  }
+
+  bool writePreferenceString(Preferences &prefs, const char *key, const String &value, size_t maxLength = 0)
+  {
+    if (maxLength > 0 && value.length() > maxLength)
+    {
+      return false;
+    }
+
+    size_t bytesToWrite = value.length() + 1;
+    size_t written = prefs.putBytes(key, value.c_str(), bytesToWrite);
+    return written == bytesToWrite;
+  }
 
   constexpr uint32_t SUPPORTED_BAUD_RATES[] = {
       9600,
@@ -67,26 +132,18 @@ bool loadDeviceConfig()
   g_config.transport = sanitizeTransport(g_preferences.getUChar("transport", static_cast<uint8_t>(TransportType::Websocket)));
   g_config.uartBaudRate = sanitizeBaudRate(g_preferences.getULong("uartBaud", UART_BAUD_DEFAULT));
 
-  auto getOptionalString = [](Preferences &prefs, const char *key) {
-    if (!prefs.isKey(key))
-    {
-      return String();
-    }
-    return prefs.getString(key, "");
-  };
-
-  String ssid = getOptionalString(g_preferences, "ssid");
-  String password = getOptionalString(g_preferences, "password");
+  String ssid = readPreferenceString(g_preferences, "ssid", WIFI_SSID_MAX_LENGTH);
+  String password = readPreferenceString(g_preferences, "password", WIFI_PASSWORD_MAX_LENGTH);
 
   g_config.wifi.ssid = ssid;
   g_config.wifi.password = password;
   g_config.hasWifiCredentials = ssid.length() > 0;
 
-  String bleName = getOptionalString(g_preferences, KEY_BLE_NAME);
+  String bleName = readPreferenceString(g_preferences, KEY_BLE_NAME);
   g_config.bleDeviceName = bleName;
   g_config.hasBleDeviceName = bleName.length() > 0;
 
-  String bleManufacturer = getOptionalString(g_preferences, KEY_BLE_MANUFACTURER);
+  String bleManufacturer = readPreferenceString(g_preferences, KEY_BLE_MANUFACTURER);
   g_config.bleManufacturerName = bleManufacturer;
   g_config.hasBleManufacturerName = bleManufacturer.length() > 0;
 
@@ -114,11 +171,11 @@ bool saveDeviceConfig()
 
   if (g_config.hasWifiCredentials && g_config.wifi.ssid.length() > 0)
   {
-    if (!g_preferences.putString("ssid", g_config.wifi.ssid))
+    if (!writePreferenceString(g_preferences, "ssid", g_config.wifi.ssid, WIFI_SSID_MAX_LENGTH))
     {
       ok = false;
     }
-    if (!g_preferences.putString("password", g_config.wifi.password))
+    if (!writePreferenceString(g_preferences, "password", g_config.wifi.password, WIFI_PASSWORD_MAX_LENGTH))
     {
       ok = false;
     }
@@ -131,7 +188,7 @@ bool saveDeviceConfig()
 
   if (g_config.hasBleDeviceName && g_config.bleDeviceName.length() > 0)
   {
-    if (!g_preferences.putString(KEY_BLE_NAME, g_config.bleDeviceName))
+    if (!writePreferenceString(g_preferences, KEY_BLE_NAME, g_config.bleDeviceName))
     {
       ok = false;
     }
@@ -143,7 +200,7 @@ bool saveDeviceConfig()
 
   if (g_config.hasBleManufacturerName && g_config.bleManufacturerName.length() > 0)
   {
-    if (!g_preferences.putString(KEY_BLE_MANUFACTURER, g_config.bleManufacturerName))
+    if (!writePreferenceString(g_preferences, KEY_BLE_MANUFACTURER, g_config.bleManufacturerName))
     {
       ok = false;
     }

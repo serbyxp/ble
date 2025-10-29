@@ -349,6 +349,16 @@ namespace
         bool hasPassword = !wifi["password"].isNull();
         String newSsid = hasSsid ? String(wifi["ssid"].as<const char *>()) : config.wifi.ssid;
         String newPassword = hasPassword ? String(wifi["password"].as<const char *>()) : config.wifi.password;
+        if (hasSsid && newSsid.length() > WIFI_SSID_MAX_LENGTH)
+        {
+          respondError(400, "WiFi SSID too long");
+          return;
+        }
+        if (hasPassword && newPassword.length() > WIFI_PASSWORD_MAX_LENGTH)
+        {
+          respondError(400, "WiFi password too long");
+          return;
+        }
         bool newHasCredentials = newSsid.length() > 0;
 
         if (hasSsid || hasPassword)

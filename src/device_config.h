@@ -14,6 +14,9 @@ struct WifiCredentials
   String password;
 };
 
+constexpr size_t WIFI_SSID_MAX_LENGTH = 32;
+constexpr size_t WIFI_PASSWORD_MAX_LENGTH = 63;
+
 constexpr uint32_t UART_BAUD_DEFAULT = 115200;
 
 struct DeviceConfig
