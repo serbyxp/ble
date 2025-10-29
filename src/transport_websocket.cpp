@@ -123,7 +123,7 @@ namespace
 
   void handleConfigGet()
   {
-    JsonDocument doc(1024);
+    JsonDocument doc;
     const DeviceConfig &config = getDeviceConfig();
 
     doc["transport"] = transportTypeToString(config.transport);
@@ -152,7 +152,7 @@ namespace
 
   void respondError(uint16_t code, const char *message)
   {
-    JsonDocument doc(256);
+    JsonDocument doc;
     doc["status"] = "error";
     doc["message"] = message;
     String payload;
@@ -192,7 +192,7 @@ namespace
       return;
     }
 
-    JsonDocument doc(1024);
+    JsonDocument doc;
     DeserializationError error = deserializeJson(doc, body);
     if (error)
     {
@@ -307,7 +307,7 @@ namespace
 
     connectOrDisconnectBasedOnConfig(wifiChanged);
 
-    JsonDocument response(128);
+    JsonDocument response;
     response["status"] = "ok";
     String payload;
     serializeJson(response, payload);
@@ -316,7 +316,7 @@ namespace
 
   void handleScanNetworks()
   {
-    JsonDocument doc(2048);
+    JsonDocument doc;
     JsonArray networks = doc["networks"].to<JsonArray>();
 
     int16_t count = WiFi.scanNetworks(/*async=*/false, /*hidden=*/true);
