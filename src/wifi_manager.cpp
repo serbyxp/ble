@@ -2,6 +2,9 @@
 
 #include <Preferences.h>
 #include <WiFi.h>
+#include <algorithm>
+#include <DNSServer.h>
+#include <vector>
 #include <esp_bt.h>
 #include <esp_coexist.h>
 #include <esp_wifi.h>
@@ -16,6 +19,8 @@ namespace
   constexpr uint32_t CONNECTION_TIMEOUT_MS = 20000;
   constexpr uint32_t RECONNECT_INTERVAL_MS = 30000;
 
+  constexpr uint8_t DNS_PORT = 53;
+
   Preferences g_preferences;
   bool g_preferencesInitialized = false;
   bool g_initialized = false;
@@ -23,6 +28,40 @@ namespace
   bool g_hasCredentials = false;
   String g_savedSsid;
   String g_savedPassword;
+  DNSServer g_dnsServer;
+  bool g_dnsServerRunning = false;
+
+  void startDnsServer(const IPAddress &ip)
+  {
+    if (g_dnsServerRunning)
+    {
+      g_dnsServer.stop();
+      g_dnsServerRunning = false;
+    }
+
+    g_dnsServer.setErrorReplyCode(DNSReplyCode::NoError);
+    if (g_dnsServer.start(DNS_PORT, "*", ip))
+    {
+      g_dnsServerRunning = true;
+      Serial.println(F("[WiFi] Captive portal DNS started"));
+    }
+    else
+    {
+      Serial.println(F("[WiFi] Failed to start captive portal DNS"));
+    }
+  }
+
+  void stopDnsServer()
+  {
+    if (!g_dnsServerRunning)
+    {
+      return;
+    }
+
+    g_dnsServer.stop();
+    g_dnsServerRunning = false;
+    Serial.println(F("[WiFi] Captive portal DNS stopped"));
+  }
 
   enum class WifiState
   {
@@ -56,11 +95,13 @@ namespace
       return;
     }
 
-    WiFi.softAPConfig(IPAddress(192, 168, 4, 1), IPAddress(192, 168, 4, 1), IPAddress(255, 255, 255, 0));
+    IPAddress apIp(192, 168, 4, 1);
+    WiFi.softAPConfig(apIp, apIp, IPAddress(255, 255, 255, 0));
     if (WiFi.softAP(ACCESS_POINT_SSID, ACCESS_POINT_PASSWORD))
     {
       g_accessPointActive = true;
       Serial.printf("[WiFi] Started access point '%s'\n", ACCESS_POINT_SSID);
+      startDnsServer(WiFi.softAPIP());
     }
     else
     {
@@ -78,6 +119,7 @@ namespace
     WiFi.softAPdisconnect(true);
     g_accessPointActive = false;
     Serial.println(F("[WiFi] Access point stopped"));
+    stopDnsServer();
   }
 
   void beginSavedStation()
@@ -254,6 +296,11 @@ void wifiManagerLoop()
     handleAccessPointOnly();
     break;
   }
+
+  if (g_dnsServerRunning)
+  {
+    g_dnsServer.processNextRequest();
+  }
 }
 
 WifiManagerStatus wifiManagerGetStatus()
@@ -329,4 +376,55 @@ void wifiManagerEnsureAccessPoint()
     startAccessPoint();
     g_state = WifiState::AccessPointOnly;
   }
+}
+
+std::vector<WifiScanResult> wifiManagerScanNetworks()
+{
+  std::vector<WifiScanResult> results;
+
+  if (!g_initialized)
+  {
+    return results;
+  }
+
+  wifi_mode_t previousMode = WiFi.getMode();
+  bool modeChanged = false;
+  if (previousMode == WIFI_MODE_AP)
+  {
+    WiFi.mode(WIFI_AP_STA);
+    modeChanged = true;
+  }
+  else if (previousMode == WIFI_MODE_NULL)
+  {
+    WiFi.mode(WIFI_STA);
+    modeChanged = true;
+  }
+
+  int16_t count = WiFi.scanNetworks(/*async*/ false, /*show_hidden*/ true);
+
+  if (count > 0)
+  {
+    results.reserve(static_cast<size_t>(count));
+    for (int16_t i = 0; i < count; ++i)
+    {
+      WifiScanResult result;
+      result.ssid = WiFi.SSID(i);
+      result.rssi = WiFi.RSSI(i);
+      result.secure = WiFi.encryptionType(i) != WIFI_AUTH_OPEN;
+      result.hidden = WiFi.isHidden(i);
+      results.push_back(std::move(result));
+    }
+    std::sort(results.begin(), results.end(), [](const WifiScanResult &a, const WifiScanResult &b) {
+      return a.rssi > b.rssi;
+    });
+  }
+
+  WiFi.scanDelete();
+
+  if (modeChanged)
+  {
+    WiFi.mode(previousMode);
+  }
+
+  return results;
 }

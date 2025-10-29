@@ -2,6 +2,7 @@
 
 #include <Arduino.h>
 #include <IPAddress.h>
+#include <vector>
 
 struct WifiManagerStatus
 {
@@ -13,6 +14,14 @@ struct WifiManagerStatus
   IPAddress accessPointIp;
 };
 
+struct WifiScanResult
+{
+  String ssid;
+  int32_t rssi;
+  bool secure;
+  bool hidden;
+};
+
 void wifiManagerInitialize();
 void wifiManagerLoop();
 WifiManagerStatus wifiManagerGetStatus();
@@ -21,3 +30,4 @@ const char *wifiManagerAccessPointPassword();
 bool wifiManagerSetCredentials(const String &ssid, const String &password);
 bool wifiManagerForgetCredentials();
 void wifiManagerEnsureAccessPoint();
+std::vector<WifiScanResult> wifiManagerScanNetworks();
