@@ -67,12 +67,15 @@ namespace
     };
 
     size_t storedLength = prefs.getBytesLength(key);
-    if (storedLength > 0)
+    if (storedLength == 0)
     {
-      if (maxLength > 0 && storedLength > (maxLength + 1))
+      String legacyValue;
+      if (readLegacyString(legacyValue))
       {
-        return String();
+        return legacyValue;
       }
+      return String();
+    }
 
       size_t copyLength = storedLength;
       if (maxLength > 0 && copyLength > (maxLength + 1))
@@ -90,16 +93,11 @@ namespace
         return String();
       }
 
-      size_t read = prefs.getBytes(key, buffer.get(), copyLength);
-      if (read == 0)
-      {
-        String legacyValue;
-        if (readLegacyString(legacyValue))
-        {
-          return legacyValue;
-        }
-        return String();
-      }
+    std::unique_ptr<char[]> buffer(new (std::nothrow) char[copyLength + 1]);
+    if (!buffer)
+    {
+      return String();
+    }
 
       if (read >= copyLength)
       {
@@ -112,12 +110,13 @@ namespace
       return String(buffer.get());
     }
 
-    String legacyValue;
-    if (readLegacyString(legacyValue))
+    if (read > copyLength)
     {
-      return legacyValue;
+      read = copyLength;
     }
-    return String();
+
+    buffer[read] = '\0';
+    return String(buffer.get());
   }
 
   bool writePreferenceString(Preferences &prefs, const char *key, const String &value, size_t maxLength)
