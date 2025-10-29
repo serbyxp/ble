@@ -152,7 +152,9 @@ namespace
 
     Serial.printf("[WiFi] Connecting to '%s'\n", g_savedSsid.c_str());
     beginSavedStation();
-    g_connectStart = millis();
+    uint32_t now = millis();
+    g_connectStart = now;
+    g_lastReconnectAttempt = now;
     g_state = WifiState::Connecting;
   }
 
@@ -204,7 +206,15 @@ namespace
   {
     if (!g_accessPointActive)
     {
-      startAccessPoint();
+      if (g_hasCredentials)
+      {
+        Serial.println(F("[WiFi] Access point offline, retrying station connection"));
+        beginStationConnection();
+      }
+      else
+      {
+        startAccessPoint();
+      }
       return;
     }
 
@@ -219,8 +229,6 @@ namespace
       return;
     }
 
-    g_lastReconnectAttempt = now;
-    stopAccessPoint();
     beginStationConnection();
   }
 
@@ -303,11 +311,17 @@ WifiManagerStatus wifiManagerGetStatus()
   WifiManagerStatus status{};
   status.hasCredentials = g_hasCredentials;
   status.connected = WiFi.status() == WL_CONNECTED;
+  status.connecting = g_state == WifiState::Connecting;
   status.accessPointActive = g_accessPointActive;
   status.connectedSsid = status.connected ? WiFi.SSID() : (g_hasCredentials ? g_savedSsid : String());
   status.stationIp = status.connected ? WiFi.localIP() : IPAddress();
   status.accessPointIp = g_accessPointActive ? WiFi.softAPIP() : IPAddress();
   return status;
+}
+
+bool wifiManagerIsConnecting()
+{
+  return g_state == WifiState::Connecting;
 }
 
 const char *wifiManagerAccessPointSsid()
@@ -362,6 +376,12 @@ void wifiManagerEnsureAccessPoint()
 {
   if (!g_initialized)
   {
+    return;
+  }
+
+  if (g_state == WifiState::Connecting && g_hasCredentials)
+  {
+    Serial.println(F("[WiFi] Access point request deferred: station connection in progress"));
     return;
   }
 
