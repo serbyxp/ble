@@ -58,7 +58,14 @@ namespace
       return String();
     }
 
-    size_t read = prefs.getBytes(key, buffer.get(), copyLength);
+    size_t bytesToRead = storedLength;
+    size_t maxReadable = copyLength + 1;
+    if (bytesToRead > maxReadable)
+    {
+      bytesToRead = maxReadable;
+    }
+
+    size_t read = prefs.getBytes(key, buffer.get(), bytesToRead);
     if (read == 0)
     {
       return String();
