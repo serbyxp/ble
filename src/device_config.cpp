@@ -1,4 +1,5 @@
 #include "device_config.h"
+#include "transport_websocket.h"
 
 #include <Preferences.h>
 #include <BleCombo.h>
@@ -218,11 +219,7 @@ String getEffectiveBleDeviceName()
   {
     return config.bleDeviceName;
   }
-  if (config.wifi.ssid.length() > 0)
-  {
-    return config.wifi.ssid;
-  }
-  return String();
+  return websocketTransportGetApSsid();
 }
 
 String getEffectiveBleDeviceManufacturer()

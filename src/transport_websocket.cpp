@@ -59,6 +59,15 @@ namespace
     return String(buffer);
   }
 
+  const String &ensureApSsidInitialized()
+  {
+    if (g_apSsid.isEmpty())
+    {
+      g_apSsid = generateApSsid();
+    }
+    return g_apSsid;
+  }
+
   void startAccessPoint()
   {
     if (g_apActive)
@@ -66,10 +75,7 @@ namespace
       return;
     }
 
-    if (g_apSsid.isEmpty())
-    {
-      g_apSsid = generateApSsid();
-    }
+    ensureApSsidInitialized();
 
     WiFi.mode(WIFI_AP_STA);
     WiFi.softAP(g_apSsid.c_str(), AP_PASSWORD);
@@ -499,6 +505,11 @@ namespace
   }
 
 } // namespace
+
+String websocketTransportGetApSsid()
+{
+  return ensureApSsidInitialized();
+}
 
 void websocketTransportBegin(QueueHandle_t queue)
 {
