@@ -22,6 +22,8 @@ struct DeviceConfig
   uint32_t uartBaudRate = UART_BAUD_DEFAULT;
   WifiCredentials wifi;
   bool hasWifiCredentials = false;
+  String bleDeviceName;
+  bool hasBleDeviceName = false;
 };
 
 /**
@@ -79,3 +81,11 @@ void notifyUartConfigChanged();
  * @brief Consume any pending UART configuration change notification.
  */
 bool consumeUartConfigChanged();
+
+/**
+ * @brief Determine the BLE device name that should be advertised.
+ *
+ * Returns the configured override when present, otherwise falls back to the
+ * stored Wi-Fi SSID or a built-in default when no credentials exist.
+ */
+String getEffectiveBleDeviceName();

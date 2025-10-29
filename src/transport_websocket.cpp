@@ -145,6 +145,11 @@ namespace
     wifi["apActive"] = g_apActive;
     wifi["portalUrl"] = g_apActive ? String("http://") + g_apIp.toString() + "/" : "";
 
+    JsonObject ble = doc["ble"].to<JsonObject>();
+    ble["name"] = config.hasBleDeviceName ? config.bleDeviceName : "";
+    ble["usingDefault"] = !config.hasBleDeviceName;
+    ble["effectiveName"] = getEffectiveBleDeviceName();
+
     String response;
     serializeJson(doc, response);
     g_httpServer.send(200, "application/json", response);
@@ -291,6 +296,39 @@ namespace
             configChanged = true;
             wifiChanged = true;
           }
+        }
+      }
+    }
+
+    if (!doc["ble"].isNull())
+    {
+      JsonObject ble = doc["ble"].as<JsonObject>();
+      JsonVariant nameVariant = ble["name"];
+      if (!nameVariant.isNull())
+      {
+        if (!nameVariant.is<const char *>() && !nameVariant.is<String>())
+        {
+          respondError(400, "Invalid BLE name");
+          return;
+        }
+        const char *rawName = nameVariant.as<const char *>();
+        String newName = rawName != nullptr ? String(rawName) : String();
+        newName.trim();
+
+        if (newName.length() == 0)
+        {
+          if (config.hasBleDeviceName || config.bleDeviceName.length() > 0)
+          {
+            config.bleDeviceName = "";
+            config.hasBleDeviceName = false;
+            configChanged = true;
+          }
+        }
+        else if (!config.hasBleDeviceName || config.bleDeviceName != newName)
+        {
+          config.bleDeviceName = newName;
+          config.hasBleDeviceName = true;
+          configChanged = true;
         }
       }
     }

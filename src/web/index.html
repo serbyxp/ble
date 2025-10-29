@@ -281,6 +281,21 @@
           <ul id="networks"></ul>
         </div>
       </section>
+      <section>
+        <h2>Bluetooth Identity</h2>
+        <p class="hint">Set the BLE device name/manufacturer shown during pairing. Leave blank to match the WiFi SSID.</p>
+        <form id="ble-form" autocomplete="off">
+          <label>
+            Device Name
+            <input id="ble-name" type="text" name="name" placeholder="Defaults to WiFi SSID" maxlength="30" />
+          </label>
+          <div class="actions">
+            <button type="submit">Save Name</button>
+            <button type="button" id="ble-reset">Use Default</button>
+          </div>
+        </form>
+        <p class="hint">Current broadcast name: <span id="ble-effective-name">Loading…</span></p>
+      </section>
       <section id="command-section">
         <h2>Command</h2>
         <p class="hint">
@@ -316,6 +331,10 @@
       const wifiScanButton = document.getElementById("wifi-scan");
       const networksList = document.getElementById("networks");
       const scanResults = document.getElementById("scan-results");
+      const bleForm = document.getElementById("ble-form");
+      const bleNameInput = document.getElementById("ble-name");
+      const bleResetButton = document.getElementById("ble-reset");
+      const bleEffectiveName = document.getElementById("ble-effective-name");
       const commandSection = document.getElementById("command-section");
       const logSection = document.getElementById("log-section");
       const statusEl = document.getElementById("status");
@@ -329,6 +348,8 @@
       let currentBaudRate = UART_BAUD_DEFAULT;
       let socket = null;
       let reconnectTimer = null;
+      let bleUsingDefault = true;
+      let currentBleName = "";
 
       function appendLog(message, type = "info") {
         const entry = document.createElement("div");
@@ -483,6 +504,24 @@
         }
       }
 
+      async function updateBleName(name) {
+        const payloadName = typeof name === "string" ? name : "";
+        try {
+          const response = await fetch("/api/config", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ ble: { name: payloadName } })
+          });
+          if (!response.ok) {
+            throw new Error(`Failed to update BLE name: ${response.status}`);
+          }
+          await loadConfig();
+        } catch (error) {
+          appendLog(error.message, "error");
+          bleNameInput.value = currentBleName;
+        }
+      }
+
       function renderNetworks(networks) {
         networksList.innerHTML = "";
         if (!networks || networks.length === 0) {
@@ -596,12 +635,32 @@
             }
           }
 
+          if (data.ble) {
+            bleUsingDefault = Boolean(data.ble.usingDefault);
+            if (typeof data.ble.name === "string" && !bleUsingDefault) {
+              currentBleName = data.ble.name;
+            } else {
+              currentBleName = "";
+            }
+            bleNameInput.value = currentBleName;
+            bleEffectiveName.textContent = data.ble.effectiveName || "(unknown)";
+          } else {
+            bleUsingDefault = true;
+            currentBleName = "";
+            bleNameInput.value = "";
+            bleEffectiveName.textContent = "(unknown)";
+          }
+
           ensureSocket();
         } catch (error) {
           transportStatusEl.textContent = "Unavailable";
           wifiStatusEl.textContent = "Unavailable";
           apStatusEl.textContent = "Unavailable";
           baudSelect.disabled = true;
+          bleEffectiveName.textContent = "Unavailable";
+          bleUsingDefault = true;
+          currentBleName = "";
+          bleNameInput.value = "";
           appendLog(error.message, "error");
         }
       }
@@ -634,6 +693,15 @@
       wifiForm.addEventListener("submit", saveWifi);
       wifiForgetButton.addEventListener("click", forgetWifi);
       wifiScanButton.addEventListener("click", scanNetworks);
+      bleForm.addEventListener("submit", (event) => {
+        event.preventDefault();
+        const value = bleNameInput.value.trim();
+        updateBleName(value);
+      });
+      bleResetButton.addEventListener("click", () => {
+        bleNameInput.value = "";
+        updateBleName("");
+      });
 
       sendBtn.addEventListener("click", () => {
         if (currentTransport !== "websocket") {
