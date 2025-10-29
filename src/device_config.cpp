@@ -107,13 +107,17 @@ namespace
         return String();
       }
 
-      if (read > copyLength)
-      {
-        read = copyLength;
-      }
+    size_t bytesToRead = storedLength;
+    size_t maxReadable = copyLength + 1;
+    if (bytesToRead > maxReadable)
+    {
+      bytesToRead = maxReadable;
+    }
 
-      buffer[read] = '\0';
-      return String(buffer.get());
+    size_t read = prefs.getBytes(key, buffer.get(), bytesToRead);
+    if (read == 0)
+    {
+      return String();
     }
 
     String legacyValue;
