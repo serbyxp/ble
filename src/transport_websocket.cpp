@@ -200,146 +200,145 @@ namespace
       return;
     }
 
-    DeviceConfig &config = getMutableDeviceConfig();
-    bool configChanged = false;
-    bool wifiChanged = false;
-    bool uartChanged = false;
+    const DeviceConfig &currentConfig = getDeviceConfig();
+    DeviceConfig updatedConfig = currentConfig;
+    const char *errorMessage = nullptr;
 
     if (doc.containsKey("transport"))
     {
       if (doc["transport"].isNull())
       {
-        respondError(400, "Transport option cannot be null");
-        return;
-      }
-      TransportType newTransport;
-      if (!parseTransportType(doc["transport"].as<String>(), newTransport))
-      {
-        respondError(400, "Unsupported transport option");
-        return;
-      }
-      if (config.transport != newTransport)
-      {
-        config.transport = newTransport;
-        configChanged = true;
-      }
-    }
-
-    if (doc.containsKey("uart"))
-    {
-      if (doc["uart"].isNull() || !doc["uart"].is<JsonObject>())
-      {
-        respondError(400, "UART settings must be an object");
-        return;
-      }
-      JsonObject uart = doc["uart"].as<JsonObject>();
-      if (uart.containsKey("baud"))
-      {
-        if (uart["baud"].isNull())
-        {
-          respondError(400, "UART baud rate cannot be null");
-          return;
-        }
-        if (!uart["baud"].is<uint32_t>())
-        {
-          respondError(400, "Invalid UART baud rate");
-          return;
-        }
-        uint32_t newBaud = uart["baud"].as<uint32_t>();
-        if (!isSupportedUartBaudRate(newBaud))
-        {
-          respondError(400, "Unsupported UART baud rate");
-          return;
-        }
-        if (config.uartBaudRate != newBaud)
-        {
-          config.uartBaudRate = newBaud;
-          configChanged = true;
-          uartChanged = true;
-        }
-      }
-    }
-
-    if (doc.containsKey("wifi"))
-    {
-      if (doc["wifi"].isNull() || !doc["wifi"].is<JsonObject>())
-      {
-        respondError(400, "WiFi settings must be an object");
-        return;
-      }
-      JsonObject wifi = doc["wifi"].as<JsonObject>();
-      if (wifi.containsKey("forget"))
-      {
-        if (wifi["forget"].isNull())
-        {
-          respondError(400, "WiFi forget flag cannot be null");
-          return;
-        }
-        if (!wifi["forget"].is<bool>())
-        {
-          respondError(400, "WiFi forget flag must be a boolean");
-          return;
-        }
-      }
-      bool forget = wifi.containsKey("forget") && wifi["forget"].as<bool>();
-      if (forget)
-      {
-        if (config.hasWifiCredentials || !config.wifi.ssid.isEmpty())
-        {
-          config.hasWifiCredentials = false;
-          config.wifi.ssid = "";
-          config.wifi.password = "";
-          configChanged = true;
-          wifiChanged = true;
-        }
+        errorMessage = "Transport option cannot be null";
       }
       else
       {
-        if (wifi.containsKey("ssid") && wifi["ssid"].isNull())
+        TransportType newTransport;
+        if (!parseTransportType(doc["transport"].as<String>(), newTransport))
         {
-          respondError(400, "WiFi SSID cannot be null");
-          return;
+          errorMessage = "Unsupported transport option";
         }
-        if (wifi.containsKey("password") && wifi["password"].isNull())
+        else
         {
-          respondError(400, "WiFi password cannot be null");
-          return;
+          updatedConfig.transport = newTransport;
         }
-        bool hasSsid = wifi.containsKey("ssid");
-        bool hasPassword = wifi.containsKey("password");
-        String newSsid = hasSsid ? String(wifi["ssid"].as<const char *>()) : config.wifi.ssid;
-        String newPassword = hasPassword ? String(wifi["password"].as<const char *>()) : config.wifi.password;
-        bool newHasCredentials = newSsid.length() > 0;
+      }
+    }
 
-        if (hasSsid || hasPassword)
+    if (!errorMessage && doc.containsKey("uart"))
+    {
+      if (doc["uart"].isNull() || !doc["uart"].is<JsonObject>())
+      {
+        errorMessage = "UART settings must be an object";
+      }
+      else
+      {
+        JsonObject uart = doc["uart"].as<JsonObject>();
+        if (uart.containsKey("baud"))
         {
-          if (newHasCredentials)
+          if (uart["baud"].isNull())
           {
-            bool ssidChanged = config.wifi.ssid != newSsid;
-            bool passwordChanged = hasPassword && config.wifi.password != newPassword;
-            if (ssidChanged || passwordChanged || !config.hasWifiCredentials)
-            {
-              config.wifi.ssid = newSsid;
-              config.wifi.password = newPassword;
-              config.hasWifiCredentials = true;
-              configChanged = true;
-              wifiChanged = true;
-            }
+            errorMessage = "UART baud rate cannot be null";
           }
-          else if (config.hasWifiCredentials)
+          else if (!uart["baud"].is<uint32_t>())
           {
-            config.hasWifiCredentials = false;
-            config.wifi.ssid = "";
-            config.wifi.password = "";
-            configChanged = true;
-            wifiChanged = true;
+            errorMessage = "Invalid UART baud rate";
+          }
+          else
+          {
+            uint32_t newBaud = uart["baud"].as<uint32_t>();
+            if (!isSupportedUartBaudRate(newBaud))
+            {
+              errorMessage = "Unsupported UART baud rate";
+            }
+            else
+            {
+              updatedConfig.uartBaudRate = newBaud;
+            }
           }
         }
       }
     }
 
-    if (configChanged)
+    if (!errorMessage && doc.containsKey("wifi"))
     {
+      if (doc["wifi"].isNull() || !doc["wifi"].is<JsonObject>())
+      {
+        errorMessage = "WiFi settings must be an object";
+      }
+      else
+      {
+        JsonObject wifi = doc["wifi"].as<JsonObject>();
+        if (wifi.containsKey("forget"))
+        {
+          if (wifi["forget"].isNull())
+          {
+            errorMessage = "WiFi forget flag cannot be null";
+          }
+          else if (!wifi["forget"].is<bool>())
+          {
+            errorMessage = "WiFi forget flag must be a boolean";
+          }
+        }
+        if (!errorMessage)
+        {
+          bool forget = wifi.containsKey("forget") && wifi["forget"].as<bool>();
+          if (forget)
+          {
+            updatedConfig.hasWifiCredentials = false;
+            updatedConfig.wifi.ssid = "";
+            updatedConfig.wifi.password = "";
+          }
+          else
+          {
+            if (wifi.containsKey("ssid") && wifi["ssid"].isNull())
+            {
+              errorMessage = "WiFi SSID cannot be null";
+            }
+            else if (wifi.containsKey("password") && wifi["password"].isNull())
+            {
+              errorMessage = "WiFi password cannot be null";
+            }
+            else if (wifi.containsKey("ssid") || wifi.containsKey("password"))
+            {
+              bool hasSsid = wifi.containsKey("ssid");
+              bool hasPassword = wifi.containsKey("password");
+              String newSsid = hasSsid ? String(wifi["ssid"].as<const char *>()) : updatedConfig.wifi.ssid;
+              String newPassword = hasPassword ? String(wifi["password"].as<const char *>()) : updatedConfig.wifi.password;
+              if (newSsid.length() > 0)
+              {
+                updatedConfig.wifi.ssid = newSsid;
+                updatedConfig.wifi.password = newPassword;
+                updatedConfig.hasWifiCredentials = true;
+              }
+              else
+              {
+                updatedConfig.hasWifiCredentials = false;
+                updatedConfig.wifi.ssid = "";
+                updatedConfig.wifi.password = "";
+              }
+            }
+          }
+        }
+      }
+    }
+
+    if (errorMessage)
+    {
+      respondError(400, errorMessage);
+      return;
+    }
+
+    bool transportChanged = updatedConfig.transport != currentConfig.transport;
+    bool uartChanged = updatedConfig.uartBaudRate != currentConfig.uartBaudRate;
+    bool wifiChanged =
+        updatedConfig.hasWifiCredentials != currentConfig.hasWifiCredentials ||
+        updatedConfig.wifi.ssid != currentConfig.wifi.ssid ||
+        updatedConfig.wifi.password != currentConfig.wifi.password;
+
+    if (transportChanged || uartChanged || wifiChanged)
+    {
+      DeviceConfig &mutableConfig = getMutableDeviceConfig();
+      mutableConfig = updatedConfig;
       saveDeviceConfig();
     }
 
