@@ -335,6 +335,11 @@ namespace
     if (source.is<JsonArrayConst>())
     {
       JsonArrayConst arr = source.as<JsonArrayConst>();
+      if (arr.size() == 0)
+      {
+        sendStatusError("keyboard action requires key(s)");
+        return false;
+      }
       for (JsonVariantConst key : arr)
       {
         if (count >= maxCount)
@@ -550,6 +555,11 @@ namespace
     if (source.is<JsonArrayConst>())
     {
       JsonArrayConst arr = source.as<JsonArrayConst>();
+      if (arr.size() == 0)
+      {
+        sendStatusError("consumer action requires key(s)");
+        return false;
+      }
       for (JsonVariantConst entry : arr)
       {
         if (!entry.is<const char *>())
@@ -958,7 +968,7 @@ namespace
         }
         else
         {
-          sendStatusError("consumer action requires key");
+          sendStatusError("consumer action requires key(s)");
           return;
         }
       }
@@ -966,7 +976,7 @@ namespace
 
     if (count == 0)
     {
-      sendStatusError("consumer action requires key");
+      sendStatusError("consumer action requires key(s)");
       return;
     }
 
