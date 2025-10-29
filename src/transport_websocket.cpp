@@ -42,6 +42,37 @@ namespace
   String g_apSsid;
   IPAddress g_apIp;
 
+  const char *wifiStatusToString(wl_status_t status)
+  {
+    switch (status)
+    {
+    case WL_IDLE_STATUS:
+      return "WL_IDLE_STATUS";
+    case WL_NO_SSID_AVAIL:
+      return "WL_NO_SSID_AVAIL";
+    case WL_SCAN_COMPLETED:
+      return "WL_SCAN_COMPLETED";
+    case WL_CONNECTED:
+      return "WL_CONNECTED";
+    case WL_CONNECT_FAILED:
+      return "WL_CONNECT_FAILED";
+    case WL_CONNECTION_LOST:
+      return "WL_CONNECTION_LOST";
+    case WL_DISCONNECTED:
+      return "WL_DISCONNECTED";
+#ifdef WL_PROVISIONING
+    case WL_PROVISIONING:
+      return "WL_PROVISIONING";
+#endif
+#ifdef WL_PROVISIONING_FAILED
+    case WL_PROVISIONING_FAILED:
+      return "WL_PROVISIONING_FAILED";
+#endif
+    default:
+      return "UNKNOWN";
+    }
+  }
+
   void sendQueueFull(uint8_t clientId)
   {
     static const char RESPONSE[] = "{\"status\":\"error\",\"message\":\"Command queue full\"}";
@@ -122,9 +153,16 @@ namespace
 
     wl_status_t waitResult = WL_IDLE_STATUS;
     unsigned long connectStart = millis();
+    bool loggedStatuses[256] = {false};
     while (millis() - connectStart < WIFI_AP_START_DELAY_MS)
     {
       waitResult = static_cast<wl_status_t>(WiFi.status());
+      int statusIndex = static_cast<int>(waitResult);
+      if (statusIndex >= 0 && statusIndex < 256 && !loggedStatuses[statusIndex])
+      {
+        loggedStatuses[statusIndex] = true;
+        Serial.printf("[WS] WiFi status observed during connect: %s (%d)\n", wifiStatusToString(waitResult), statusIndex);
+      }
       if (waitResult == WL_CONNECTED || waitResult == WL_CONNECT_FAILED || waitResult == WL_NO_SSID_AVAIL)
       {
         break;
@@ -136,6 +174,7 @@ namespace
     {
       waitResult = static_cast<wl_status_t>(WiFi.status());
     }
+    Serial.printf("[WS] WiFi connect wait finished after %lu ms with status %s (%d)\n", millis() - connectStart, wifiStatusToString(waitResult), static_cast<int>(waitResult));
     if (waitResult != WL_CONNECTED)
     {
       Serial.printf("[WS] WiFi connection failed (status=%d)\n", static_cast<int>(waitResult));
@@ -617,6 +656,19 @@ void websocketTransportLoop()
       bool connectionTimedOut = g_lastConnectionAttempt != 0 && (millis() - g_lastConnectionAttempt) >= WIFI_AP_START_DELAY_MS;
       if (!hasCredentials || connectionFailed || connectionTimedOut)
       {
+        if (!hasCredentials)
+        {
+          Serial.println("[WS] Starting Access Point due to missing WiFi credentials");
+        }
+        else if (connectionFailed)
+        {
+          Serial.printf("[WS] Starting Access Point due to WiFi failure: %s (%d)\n", wifiStatusToString(status), static_cast<int>(status));
+        }
+        else if (connectionTimedOut)
+        {
+          unsigned long elapsed = millis() - g_lastConnectionAttempt;
+          Serial.printf("[WS] Starting Access Point due to WiFi timeout after %lu ms (status=%s/%d)\n", elapsed, wifiStatusToString(status), static_cast<int>(status));
+        }
         startAccessPoint();
       }
     }
