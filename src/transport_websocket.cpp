@@ -804,3 +804,25 @@ void websocketTransportLoop()
     }
   }
   else if (!g_staConnected && !g_staConnecting)
+  {
+    const DeviceConfig &config = getDeviceConfig();
+
+    if (config.hasWifiCredentials &&
+        (millis() - g_lastConnectionAttempt) > WIFI_RETRY_INTERVAL_MS)
+    {
+      Serial.println(F("[WiFi] Retrying connection..."));
+      connectToConfiguredNetwork();
+    }
+  }
+
+  if (!g_staConnected && !g_apActive)
+  {
+    Serial.println(F("[WiFi] No STA connection - ensuring AP is active"));
+    startAccessPoint();
+  }
+}
+
+void websocketTransportBroadcast(const char *message)
+{
+  g_websocket.broadcastTXT(message);
+}
