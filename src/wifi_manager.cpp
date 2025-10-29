@@ -165,10 +165,14 @@ namespace
       return;
     }
 
-    if (!g_accessPointActive)
+    if (g_accessPointActive)
     {
-      WiFi.mode(WIFI_AP_STA);
-      startAccessPoint();
+      stopAccessPoint();
+    }
+
+    if (WiFi.getMode() != WIFI_MODE_STA)
+    {
+      WiFi.mode(WIFI_STA);
     }
   }
 
