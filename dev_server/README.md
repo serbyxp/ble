@@ -24,7 +24,7 @@ uvicorn web.server:app --reload
 
 Environment variables control the initial serial port configuration:
 
-- `UART_PORT` (default: `COM3`)
+- `UART_PORT` (default: auto-detected – `COM3` on Windows, `/dev/ttyUSB0` on Linux, `/dev/cu.usbserial` on macOS)
 - `UART_BAUD` (default: `115200`)
 - `UART_LISTEN_SECONDS` (default: `0.5`)
 
