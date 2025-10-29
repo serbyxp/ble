@@ -1105,6 +1105,7 @@ namespace
 
 void BleCommandProcessor::begin()
 {
+  Serial.println("[BLE] begin(): restarting BLE stack");
   shutdownBleStack();
 
   if (!defaultManufacturerCaptured)
@@ -1119,6 +1120,7 @@ void BleCommandProcessor::begin()
   Mouse.begin();
   bleStackActive = true;
   lastBleConnectionState = Keyboard.isConnected();
+  Serial.printf("[BLE] begin(): advertising as '%s' by '%s' (connected=%s)\n", Keyboard.deviceName.c_str(), Keyboard.deviceManufacturer.c_str(), lastBleConnectionState ? "true" : "false");
 }
 
 void BleCommandProcessor::handleCommand(const CommandMessage &message) const
@@ -1172,10 +1174,13 @@ void BleCommandProcessor::applyIdentityFromConfig()
     desiredManufacturer.assign(Keyboard.deviceManufacturer);
   }
 
+  Serial.printf("[BLE] applyIdentityFromConfig(): desired name='%s', manufacturer='%s'\n", desiredName.c_str(), desiredManufacturer.c_str());
+
   if (!bleStackActive)
   {
     Keyboard.deviceName = desiredName;
     Keyboard.deviceManufacturer = desiredManufacturer;
+    Serial.println("[BLE] applyIdentityFromConfig(): stack inactive, updated identity without restart");
     return;
   }
 
@@ -1184,10 +1189,13 @@ void BleCommandProcessor::applyIdentityFromConfig()
 
   if (!nameChanged && !manufacturerChanged)
   {
+    Serial.println("[BLE] applyIdentityFromConfig(): identity unchanged");
     return;
   }
 
   bool wasConnected = Keyboard.isConnected();
+
+  Serial.printf("[BLE] applyIdentityFromConfig(): reinitializing stack (nameChanged=%s, manufacturerChanged=%s)\n", nameChanged ? "true" : "false", manufacturerChanged ? "true" : "false");
 
   Keyboard.end();
   vTaskDelay(pdMS_TO_TICKS(10));
@@ -1207,6 +1215,8 @@ void BleCommandProcessor::applyIdentityFromConfig()
   Keyboard.begin();
   Mouse.begin();
   delay(10);
+
+  Serial.printf("[BLE] applyIdentityFromConfig(): advertising as '%s' by '%s'\n", Keyboard.deviceName.c_str(), Keyboard.deviceManufacturer.c_str());
 
   bool connected = Keyboard.isConnected();
   if (connected != lastBleConnectionState)
