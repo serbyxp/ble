@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import json
 import os
+import sys
 import threading
 import time
 from pathlib import Path
@@ -23,7 +24,27 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-DEFAULT_PORT = os.getenv("UART_PORT", "COM3")
+def _detect_default_port() -> tuple[str, str]:
+    env_port = os.getenv("UART_PORT")
+    if env_port:
+        return env_port, "UART_PORT"
+
+    platform = sys.platform
+    if platform.startswith("win"):
+        return "COM3", "windows-default"
+    if platform == "darwin":
+        return "/dev/cu.usbserial", "darwin-default"
+    if platform.startswith("linux"):
+        return "/dev/ttyUSB0", "linux-default"
+    if platform.startswith("freebsd"):
+        return "/dev/cuau0", "freebsd-default"
+    if platform.startswith("cygwin"):
+        return "COM3", "cygwin-default"
+
+    return "COM3", "fallback"
+
+
+DEFAULT_PORT, DEFAULT_PORT_SOURCE = _detect_default_port()
 DEFAULT_BAUD = int(os.getenv("UART_BAUD", "115200"))
 DEFAULT_LISTEN_SECONDS = float(os.getenv("UART_LISTEN_SECONDS", "0.5"))
 
@@ -173,6 +194,15 @@ app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
 @app.on_event("startup")
 def startup() -> None:
+    if DEFAULT_PORT_SOURCE == "UART_PORT":
+        source_note = "from UART_PORT"
+    else:
+        source_note = f"auto-detected ({DEFAULT_PORT_SOURCE})"
+
+    print(
+        f"[server] Opening serial bridge on {bridge.port} @ {bridge.baud} baud "
+        f"({source_note}). Set UART_PORT to override."
+    )
     try:
         bridge.connect()
     except HTTPException as exc:

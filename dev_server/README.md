@@ -24,7 +24,7 @@ uvicorn web.server:app --reload
 
 Environment variables control the initial serial port configuration:
 
-- `UART_PORT` (default: `COM3`)
+- `UART_PORT` (default: auto-detected – `COM3` on Windows, `/dev/ttyUSB0` on Linux, `/dev/cu.usbserial` on macOS)
 - `UART_BAUD` (default: `115200`)
 - `UART_LISTEN_SECONDS` (default: `0.5`)
 
@@ -41,6 +41,8 @@ Once the server is running, open <http://127.0.0.1:8000/> in your browser. The p
 - **Log view** – shows both the commands issued and the JSON responses from the device.
 
 If the ESP32 is not yet in range or paired, the UI will still load; once the device is ready, use the Connect form to reopen the serial port.
+
+If the firmware cannot persist a configuration change, `/api/config` responds with a JSON error such as "Failed to persist configuration. Please retry or power-cycle the device." The UI surfaces this message so you can retry or cycle power before continuing.
 
 ### Customising behaviour
 
