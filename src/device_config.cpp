@@ -34,32 +34,26 @@ namespace
     }
 
     auto readLegacyString = [&](String &outValue) -> bool {
+      if (prefs.getType(key) != PT_STR)
+      {
+        return false;
+      }
+
       size_t allowedLength = (maxLength > 0) ? maxLength : MAX_STORED_STRING_LENGTH;
-      size_t legacyLengthWithNull = prefs.getString(key, nullptr, 0);
-      if (legacyLengthWithNull == 0)
-      {
-        return false;
-      }
-
-      size_t legacyLength = legacyLengthWithNull - 1;
-      if (legacyLength > allowedLength)
-      {
-        return false;
-      }
-
-      std::unique_ptr<char[]> buffer(new (std::nothrow) char[legacyLength + 1]);
+      std::unique_ptr<char[]> buffer(new (std::nothrow) char[allowedLength + 1]);
       if (!buffer)
       {
         return false;
       }
 
-      size_t readLength = prefs.getString(key, buffer.get(), legacyLength + 1);
-      if (readLength > legacyLength)
+      size_t readLength = prefs.getString(key, buffer.get(), allowedLength + 1);
+      if (readLength > allowedLength)
       {
-        readLength = legacyLength;
+        return false;
       }
-      buffer[readLength] = '\0';
 
+      size_t terminatorIndex = (readLength <= allowedLength) ? readLength : allowedLength;
+      buffer[terminatorIndex] = '\0';
       outValue = String(buffer.get());
 
       Preferences migrator;
@@ -81,16 +75,16 @@ namespace
       }
 
       size_t copyLength = storedLength;
-      if (maxLength > 0 && copyLength > maxLength)
+      if (maxLength > 0 && copyLength > (maxLength + 1))
       {
-        copyLength = maxLength;
+        copyLength = maxLength + 1;
       }
-      else if (maxLength == 0 && copyLength > MAX_STORED_STRING_LENGTH)
+      else if (maxLength == 0 && copyLength > (MAX_STORED_STRING_LENGTH + 1))
       {
-        copyLength = MAX_STORED_STRING_LENGTH;
+        copyLength = MAX_STORED_STRING_LENGTH + 1;
       }
 
-      std::unique_ptr<char[]> buffer(new (std::nothrow) char[copyLength + 1]);
+      std::unique_ptr<char[]> buffer(new (std::nothrow) char[copyLength]);
       if (!buffer)
       {
         return String();
@@ -107,12 +101,14 @@ namespace
         return String();
       }
 
-      if (read > copyLength)
+      if (read >= copyLength)
       {
-        read = copyLength;
+        buffer[copyLength - 1] = '\0';
       }
-
-      buffer[read] = '\0';
+      else
+      {
+        buffer[read] = '\0';
+      }
       return String(buffer.get());
     }
 
