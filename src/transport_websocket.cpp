@@ -13,6 +13,14 @@
 
 #include "web/index.html"
 
+String generateApSsid()
+{
+  uint32_t identifier = static_cast<uint32_t>(ESP.getEfuseMac() & 0xFFFFFF);
+  char buffer[20];
+  snprintf(buffer, sizeof(buffer), "ble-bridge-%06X", identifier);
+  return String(buffer);
+}
+
 namespace
 {
   constexpr uint16_t WEBSOCKET_PORT = 81;
@@ -51,14 +59,6 @@ namespace
     g_websocket.sendTXT(clientId, RESPONSE);
   }
 
-  String generateApSsid()
-  {
-    uint32_t identifier = static_cast<uint32_t>(ESP.getEfuseMac() & 0xFFFFFF);
-    char buffer[20];
-    snprintf(buffer, sizeof(buffer), "ble-bridge-%06X", identifier);
-    return String(buffer);
-  }
-
   void startAccessPoint()
   {
     if (g_apActive)
@@ -66,10 +66,7 @@ namespace
       return;
     }
 
-    if (g_apSsid.isEmpty())
-    {
-      g_apSsid = generateApSsid();
-    }
+    g_apSsid = generateApSsid();
 
     WiFi.mode(WIFI_AP_STA);
     WiFi.softAP(g_apSsid.c_str(), AP_PASSWORD);
@@ -147,8 +144,12 @@ namespace
 
     JsonObject ble = doc["ble"].to<JsonObject>();
     ble["name"] = config.hasBleDeviceName ? config.bleDeviceName : "";
-    ble["usingDefault"] = !config.hasBleDeviceName;
+    ble["manufacturer"] = config.hasBleManufacturerName ? config.bleManufacturerName : "";
+    ble["usingDefaultName"] = !config.hasBleDeviceName;
+    ble["usingDefaultManufacturer"] = !config.hasBleManufacturerName;
+    ble["usingDefault"] = !config.hasBleDeviceName && !config.hasBleManufacturerName;
     ble["effectiveName"] = getEffectiveBleDeviceName();
+    ble["effectiveManufacturer"] = getEffectiveBleDeviceManufacturer();
 
     String response;
     serializeJson(doc, response);
@@ -328,6 +329,35 @@ namespace
         {
           config.bleDeviceName = newName;
           config.hasBleDeviceName = true;
+          configChanged = true;
+        }
+      }
+
+      JsonVariant manufacturerVariant = ble["manufacturer"];
+      if (!manufacturerVariant.isNull())
+      {
+        if (!manufacturerVariant.is<const char *>() && !manufacturerVariant.is<String>())
+        {
+          respondError(400, "Invalid BLE manufacturer");
+          return;
+        }
+        const char *rawManufacturer = manufacturerVariant.as<const char *>();
+        String newManufacturer = rawManufacturer != nullptr ? String(rawManufacturer) : String();
+        newManufacturer.trim();
+
+        if (newManufacturer.length() == 0)
+        {
+          if (config.hasBleManufacturerName || config.bleManufacturerName.length() > 0)
+          {
+            config.bleManufacturerName = "";
+            config.hasBleManufacturerName = false;
+            configChanged = true;
+          }
+        }
+        else if (!config.hasBleManufacturerName || config.bleManufacturerName != newManufacturer)
+        {
+          config.bleManufacturerName = newManufacturer;
+          config.hasBleManufacturerName = true;
           configChanged = true;
         }
       }
