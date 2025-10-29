@@ -411,7 +411,7 @@ std::vector<WifiScanResult> wifiManagerScanNetworks()
       result.ssid = WiFi.SSID(i);
       result.rssi = WiFi.RSSI(i);
       result.secure = WiFi.encryptionType(i) != WIFI_AUTH_OPEN;
-      result.hidden = WiFi.isHidden(i);
+      result.hidden = result.ssid.isEmpty();
       results.push_back(std::move(result));
     }
     std::sort(results.begin(), results.end(), [](const WifiScanResult &a, const WifiScanResult &b) {
