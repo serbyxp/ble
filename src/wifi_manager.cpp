@@ -1,473 +1,621 @@
 #include "wifi_manager.h"
 
 #include <Preferences.h>
-#include <WiFi.h>
-#include <algorithm>
 #include <DNSServer.h>
-#include <vector>
-#include <esp_bt.h>
-#include <esp_coexist.h>
 #include <esp_wifi.h>
+#include <esp_coexist.h>
+#include <esp_system.h> // esp_random()
 
-namespace
+// ---------- Config ----------
+static constexpr uint16_t CAPTIVE_DNS_PORT = 53;
+static constexpr uint32_t CONNECTION_TIMEOUT_MS = 20000; // 20s
+static constexpr uint32_t BACKOFF_BASE_MS = 30000;       // 30s
+static constexpr uint32_t BACKOFF_MAX_MS = 300000;       // 5 min
+static constexpr uint32_t ROLLBACK_WAIT_MS = 5000;       // 5s fallback assoc grace
+
+static const IPAddress AP_IP(192, 168, 4, 1);
+static const IPAddress AP_NETMASK(255, 255, 255, 0);
+static const IPAddress AP_GW(192, 168, 4, 1);
+static const char *AP_SSID = "ble-hid";
+
+// ---------- State ----------
+enum class State
 {
-  constexpr const char *PREF_NAMESPACE = "wifi";
-  constexpr const char *KEY_SSID = "ssid";
-  constexpr const char *KEY_PASSWORD = "password";
-  constexpr const char *ACCESS_POINT_SSID = "ble-hid";
-  constexpr const char *ACCESS_POINT_PASSWORD = "uhid1234";
-  constexpr uint32_t CONNECTION_TIMEOUT_MS = 20000;
-  constexpr uint32_t RECONNECT_INTERVAL_MS = 30000;
+  AccessPointOnly,
+  Connecting,
+  Connected
+};
+static State g_state = State::AccessPointOnly;
 
-  constexpr uint8_t DNS_PORT = 53;
+static String g_ssid;
+static String g_password;
 
-  Preferences g_preferences;
-  bool g_preferencesInitialized = false;
-  bool g_initialized = false;
-  bool g_accessPointActive = false;
-  bool g_hasCredentials = false;
-  String g_savedSsid;
-  String g_savedPassword;
-  DNSServer g_dnsServer;
-  bool g_dnsServerRunning = false;
+static bool g_hasCredentials = false;
+static bool g_accessPointActive = false;
+static bool g_dnsServerRunning = false;
 
-  void startDnsServer(const IPAddress &ip)
-  {
-    if (g_dnsServerRunning)
-    {
-      g_dnsServer.stop();
-      g_dnsServerRunning = false;
-    }
+static uint32_t g_connectStart = 0;
 
-    g_dnsServer.setErrorReplyCode(DNSReplyCode::NoError);
-    if (g_dnsServer.start(DNS_PORT, "*", ip))
-    {
-      g_dnsServerRunning = true;
-      Serial.println(F("[WiFi] Captive portal DNS started"));
-    }
-    else
-    {
-      Serial.println(F("[WiFi] Failed to start captive portal DNS"));
-    }
-  }
+// Backoff for AP-only retry loop
+static uint32_t g_backoffMs = BACKOFF_BASE_MS;
+static uint32_t g_nextReconnectAt = 0;
 
-  void stopDnsServer()
-  {
-    if (!g_dnsServerRunning)
-    {
-      return;
-    }
+// Event-driven failure flags (set by onEvent, consumed by Connecting handler)
+static volatile wifi_err_reason_t g_lastDiscReason = WIFI_REASON_UNSPECIFIED;
+static volatile bool g_evtAuthFail = false;
+static volatile bool g_evtNoApFound = false;
 
-    g_dnsServer.stop();
-    g_dnsServerRunning = false;
-    Serial.println(F("[WiFi] Captive portal DNS stopped"));
-  }
+static Preferences g_prefs;
+static DNSServer g_dns;
 
-  enum class WifiState
-  {
-    AccessPointOnly,
-    Connecting,
-    Connected
-  };
+// Track last good (connected) association for rollback
+static String g_prevSsid;
+static String g_prevPassword;
+static uint8_t g_prevBssid[6] = {0};
+static int32_t g_prevChannel = 0;
+static bool g_prevValid = false;
 
-  WifiState g_state = WifiState::AccessPointOnly;
-  uint32_t g_connectStart = 0;
-  uint32_t g_lastReconnectAttempt = 0;
+// Pending credentials submitted via portal; only commit on success
+static String g_pendingSsid;
+static String g_pendingPassword;
+static bool g_hasPending = false;
 
-  void ensurePreferences()
-  {
-    if (g_preferencesInitialized)
-    {
-      return;
-    }
+// ---------- Internals ----------
+static void startDnsServer();
+static void stopDnsServer();
+static void startAccessPoint(); // always pure AP (idle portal)
+static void stopAccessPoint();
+static void beginStationConnection();
+static void handleAccessPointOnly();
+static void handleConnecting();
+static void handleConnected();
+static void snapshotCurrentAssociation();
+static bool attemptStaSwitchWithRollback(const String &newSsid, const String &newPass, uint32_t timeoutMs);
+static uint32_t jittered(uint32_t baseMs, uint32_t pct); // ±pct%
+static void scheduleBackoff(bool increase);
+static void clearConnectEvents();
 
-    g_preferences.begin(PREF_NAMESPACE, false);
-    g_savedSsid = g_preferences.getString(KEY_SSID, "");
-    g_savedPassword = g_preferences.getString(KEY_PASSWORD, "");
-    g_hasCredentials = !g_savedSsid.isEmpty();
-    g_preferencesInitialized = true;
-  }
+// Event hook
+static void onWiFiEvent(WiFiEvent_t event, WiFiEventInfo_t info);
 
-  void startAccessPoint()
-  {
-    if (g_accessPointActive)
-    {
-      return;
-    }
-
-    wifi_mode_t targetMode = g_hasCredentials ? WIFI_AP_STA : WIFI_AP;
-    if (WiFi.getMode() != targetMode)
-    {
-      WiFi.mode(targetMode);
-    }
-    IPAddress apIp(192, 168, 4, 1);
-    WiFi.softAPConfig(apIp, apIp, IPAddress(255, 255, 255, 0));
-    if (WiFi.softAP(ACCESS_POINT_SSID, ACCESS_POINT_PASSWORD))
-    {
-      g_accessPointActive = true;
-      Serial.printf("[WiFi] Started access point '%s'\n", ACCESS_POINT_SSID);
-      startDnsServer(WiFi.softAPIP());
-    }
-    else
-    {
-      Serial.println(F("[WiFi] Failed to start access point"));
-    }
-  }
-
-  void stopAccessPoint()
-  {
-    if (!g_accessPointActive)
-    {
-      return;
-    }
-
-    WiFi.softAPdisconnect(true);
-    g_accessPointActive = false;
-    Serial.println(F("[WiFi] Access point stopped"));
-    stopDnsServer();
-  }
-
-  void beginSavedStation()
-  {
-    if (g_savedPassword.isEmpty())
-    {
-      WiFi.begin(g_savedSsid.c_str());
-    }
-    else
-    {
-      WiFi.begin(g_savedSsid.c_str(), g_savedPassword.c_str());
-    }
-  }
-
-  void beginStationConnection()
-  {
-    if (!g_hasCredentials)
-    {
-      return;
-    }
-
-    wifi_mode_t targetMode = g_accessPointActive ? WIFI_AP_STA : WIFI_STA;
-    if (WiFi.getMode() != targetMode)
-    {
-      WiFi.mode(targetMode);
-    }
-
-    Serial.printf("[WiFi] Connecting to '%s'\n", g_savedSsid.c_str());
-    if (g_accessPointActive)
-    {
-      Serial.println(F("[WiFi] Access point remains active during station connection attempt"));
-    }
-    beginSavedStation();
-    uint32_t now = millis();
-    g_connectStart = now;
-    g_lastReconnectAttempt = now;
-    g_state = WifiState::Connecting;
-  }
-
-  void handleConnected()
-  {
-    if (WiFi.status() != WL_CONNECTED)
-    {
-      Serial.println(F("[WiFi] Station connection lost"));
-      WiFi.disconnect();
-      if (g_accessPointActive)
-      {
-        Serial.println(F("[WiFi] Access point already active during reconnection attempt"));
-      }
-      else if (g_hasCredentials)
-      {
-        Serial.println(F("[WiFi] Restarting access point for reconnection attempt"));
-        startAccessPoint();
-      }
-      beginStationConnection();
-      return;
-    }
-
-    if (g_accessPointActive)
-    {
-      Serial.println(F("[WiFi] Station connected; shutting down access point"));
-      stopAccessPoint();
-    }
-
-    if (WiFi.getMode() != WIFI_MODE_STA)
-    {
-      WiFi.mode(WIFI_STA);
-    }
-  }
-
-  void handleConnecting()
-  {
-    wl_status_t status = WiFi.status();
-    uint32_t now = millis();
-
-    if (status == WL_CONNECTED)
-    {
-      Serial.printf("[WiFi] Connected to '%s' with IP %s\n", g_savedSsid.c_str(), WiFi.localIP().toString().c_str());
-      g_state = WifiState::Connected;
-      return;
-    }
-
-    if (now - g_connectStart >= CONNECTION_TIMEOUT_MS)
-    {
-      Serial.println(F("[WiFi] Connection timed out, keeping access point active"));
-      WiFi.disconnect(true);
-      if (!g_accessPointActive)
-      {
-        Serial.println(F("[WiFi] Warning: access point unexpectedly inactive during retry"));
-        startAccessPoint();
-      }
-      else
-      {
-        Serial.println(F("[WiFi] Access point still active; will retry station connection"));
-      }
-      g_state = WifiState::AccessPointOnly;
-      g_lastReconnectAttempt = now;
-    }
-  }
-
-  void handleAccessPointOnly()
-  {
-    if (!g_accessPointActive)
-    {
-      if (g_hasCredentials)
-      {
-        Serial.println(F("[WiFi] Access point offline, retrying station connection"));
-        startAccessPoint();
-        beginStationConnection();
-      }
-      else
-      {
-        startAccessPoint();
-      }
-      return;
-    }
-
-    if (!g_hasCredentials)
-    {
-      return;
-    }
-
-    if (!g_accessPointActive)
-    {
-      Serial.println(F("[WiFi] Warning: expected access point to remain active during retries"));
-    }
-
-    uint32_t now = millis();
-    if (now - g_lastReconnectAttempt < RECONNECT_INTERVAL_MS)
-    {
-      return;
-    }
-
-    beginStationConnection();
-  }
-
-  void resetStationState()
-  {
-    WiFi.disconnect(true);
-    stopAccessPoint();
-    if (!g_hasCredentials)
-    {
-      g_state = WifiState::AccessPointOnly;
-      startAccessPoint();
-    }
-    else
-    {
-      beginStationConnection();
-    }
-  }
-
-} // namespace
-
-void wifiManagerInitialize()
+// ---------- Helpers ----------
+static uint32_t jittered(uint32_t baseMs, uint32_t pct)
 {
-  if (g_initialized)
+  // pct in [0..50] typically; produce base ± (pct%)
+  uint32_t span = (baseMs * pct) / 100;
+  uint32_t r = esp_random() % (2 * span + 1); // [0..2*span]
+  int32_t delta = (int32_t)r - (int32_t)span; // [-span..+span]
+  int64_t v = (int64_t)baseMs + delta;
+  if (v < 0)
+    v = 0;
+  return (uint32_t)v;
+}
+
+static void scheduleBackoff(bool increase)
+{
+  if (increase)
   {
-    return;
-  }
-
-  ensurePreferences();
-
-  esp_bt_controller_mem_release(ESP_BT_MODE_CLASSIC_BT);
-  esp_coex_preference_set(ESP_COEX_PREFER_BALANCE);
-  esp_wifi_set_ps(WIFI_PS_MIN_MODEM);
-
-  WiFi.persistent(false);
-  WiFi.setAutoReconnect(false);
-  WiFi.setAutoConnect(false);
-
-  if (g_hasCredentials)
-  {
-    beginStationConnection();
+    if (g_backoffMs < BACKOFF_MAX_MS)
+    {
+      uint64_t doubled = (uint64_t)g_backoffMs * 2ULL;
+      g_backoffMs = (doubled > BACKOFF_MAX_MS) ? BACKOFF_MAX_MS : (uint32_t)doubled;
+    }
   }
   else
   {
-    WiFi.mode(WIFI_AP);
-    startAccessPoint();
-    g_state = WifiState::AccessPointOnly;
+    g_backoffMs = BACKOFF_BASE_MS;
   }
-
-  g_initialized = true;
+  g_nextReconnectAt = millis() + jittered(g_backoffMs, 10);
 }
 
-void wifiManagerLoop()
+static void clearConnectEvents()
 {
-  if (!g_initialized)
-  {
-    return;
-  }
+  g_evtAuthFail = false;
+  g_evtNoApFound = false;
+  g_lastDiscReason = WIFI_REASON_UNSPECIFIED;
+}
 
-  switch (g_state)
-  {
-  case WifiState::Connected:
-    handleConnected();
-    break;
-  case WifiState::Connecting:
-    handleConnecting();
-    break;
-  case WifiState::AccessPointOnly:
-    handleAccessPointOnly();
-    break;
-  }
-
+// ---------- DNS ----------
+static void startDnsServer()
+{
   if (g_dnsServerRunning)
-  {
-    g_dnsServer.processNextRequest();
-  }
-}
-
-WifiManagerStatus wifiManagerGetStatus()
-{
-  WifiManagerStatus status{};
-  status.hasCredentials = g_hasCredentials;
-  status.connected = WiFi.status() == WL_CONNECTED;
-  status.connecting = g_state == WifiState::Connecting;
-  status.accessPointActive = g_accessPointActive;
-  status.connectedSsid = status.connected ? WiFi.SSID() : (g_hasCredentials ? g_savedSsid : String());
-  status.stationIp = status.connected ? WiFi.localIP() : IPAddress();
-  status.accessPointIp = g_accessPointActive ? WiFi.softAPIP() : IPAddress();
-  return status;
-}
-
-bool wifiManagerIsConnecting()
-{
-  return g_state == WifiState::Connecting;
-}
-
-const char *wifiManagerAccessPointSsid()
-{
-  return ACCESS_POINT_SSID;
-}
-
-const char *wifiManagerAccessPointPassword()
-{
-  return ACCESS_POINT_PASSWORD;
-}
-
-bool wifiManagerSetCredentials(const String &ssid, const String &password)
-{
-  ensurePreferences();
-
-  String trimmedSsid = ssid;
-  trimmedSsid.trim();
-
-  if (trimmedSsid.isEmpty())
-  {
-    return false;
-  }
-
-  g_preferences.putString(KEY_SSID, trimmedSsid);
-  g_preferences.putString(KEY_PASSWORD, password);
-  g_savedSsid = trimmedSsid;
-  g_savedPassword = password;
-  g_hasCredentials = true;
-  g_lastReconnectAttempt = 0;
-  resetStationState();
-  return true;
-}
-
-bool wifiManagerForgetCredentials()
-{
-  ensurePreferences();
-
-  bool ok = true;
-  ok &= g_preferences.remove(KEY_SSID);
-  ok &= g_preferences.remove(KEY_PASSWORD);
-
-  g_savedSsid = "";
-  g_savedPassword = "";
-  g_hasCredentials = false;
-  g_lastReconnectAttempt = 0;
-  resetStationState();
-  return ok;
-}
-
-void wifiManagerEnsureAccessPoint()
-{
-  if (!g_initialized)
-  {
     return;
-  }
+  g_dns.start(CAPTIVE_DNS_PORT, "*", AP_IP);
+  g_dnsServerRunning = true;
+}
 
-  if (g_state == WifiState::Connecting && g_hasCredentials)
-  {
-    Serial.println(F("[WiFi] Access point request deferred: station connection in progress"));
+static void stopDnsServer()
+{
+  if (!g_dnsServerRunning)
     return;
+  g_dns.stop();
+  g_dnsServerRunning = false;
+}
+
+// ---------- AP lifecycle ----------
+static void startAccessPoint()
+{
+  // Idle portal runs as pure AP; AP+STA is used only during active portal connect attempts.
+  wifi_mode_t targetMode = WIFI_AP;
+  if (WiFi.getMode() != targetMode)
+  {
+    WiFi.mode(targetMode);
   }
 
   if (!g_accessPointActive)
   {
-    startAccessPoint();
-    g_state = WifiState::AccessPointOnly;
+    WiFi.softAPConfig(AP_IP, AP_GW, AP_NETMASK);
+    WiFi.softAP(AP_SSID);
+    g_accessPointActive = true;
+    startDnsServer();
+    Serial.println(F("[WiFi] AP started (pure AP) with captive DNS"));
   }
 }
 
-std::vector<WifiScanResult> wifiManagerScanNetworks()
+static void stopAccessPoint()
 {
-  std::vector<WifiScanResult> results;
+  if (!g_accessPointActive)
+    return;
+  stopDnsServer();
+  WiFi.softAPdisconnect(true);
+  g_accessPointActive = false;
+  Serial.println(F("[WiFi] AP stopped (captive DNS stopped)"));
+}
 
-  if (!g_initialized)
+// ---------- Association snapshot & provisional switch ----------
+static void snapshotCurrentAssociation()
+{
+  if (WiFi.status() != WL_CONNECTED)
   {
-    return results;
+    g_prevValid = false;
+    return;
   }
+  wifi_ap_record_t apInfo{};
+  if (esp_wifi_sta_get_ap_info(&apInfo) == ESP_OK)
+  {
+    g_prevSsid = WiFi.SSID();
+    g_prevPassword = g_password; // last committed password
+    memcpy(g_prevBssid, apInfo.bssid, 6);
+    g_prevChannel = apInfo.primary;
+    g_prevValid = true;
+  }
+  else
+  {
+    g_prevValid = false;
+  }
+}
 
-  wifi_mode_t previousMode = WiFi.getMode();
-  bool modeChanged = false;
-  if (previousMode == WIFI_MODE_AP)
-  {
-    WiFi.mode(WIFI_AP_STA);
-    modeChanged = true;
-  }
-  else if (previousMode == WIFI_MODE_NULL)
-  {
+static bool attemptStaSwitchWithRollback(const String &newSsid, const String &newPass, uint32_t timeoutMs)
+{
+  if (WiFi.getMode() != WIFI_STA)
     WiFi.mode(WIFI_STA);
-    modeChanged = true;
-  }
+  if (WiFi.status() != WL_CONNECTED)
+    return false;
 
-  int16_t count = WiFi.scanNetworks(/*async*/ false, /*show_hidden*/ true);
+  snapshotCurrentAssociation();
 
-  if (count > 0)
+  Serial.printf("[WiFi] Provisional switch: '%s' -> '%s'\n",
+                g_prevValid ? g_prevSsid.c_str() : "(unknown)",
+                newSsid.c_str());
+
+  // Attempt new SSID (STA-only). If you know channel/BSSID from a scan, prefer the 5-arg begin().
+  clearConnectEvents();
+  WiFi.begin(newSsid.c_str(), newPass.c_str());
+
+  uint32_t start = millis();
+  while (millis() - start < timeoutMs)
   {
-    results.reserve(static_cast<size_t>(count));
-    for (int16_t i = 0; i < count; ++i)
+    if (WiFi.status() == WL_CONNECTED)
     {
-      WifiScanResult result;
-      result.ssid = WiFi.SSID(i);
-      result.rssi = WiFi.RSSI(i);
-      result.secure = WiFi.encryptionType(i) != WIFI_AUTH_OPEN;
-      result.hidden = result.ssid.isEmpty();
-      results.push_back(std::move(result));
+      Serial.printf("[WiFi] Provisional switch SUCCESS: now on '%s'\n", WiFi.SSID().c_str());
+      return true;
     }
-    std::sort(results.begin(), results.end(), [](const WifiScanResult &a, const WifiScanResult &b) {
-      return a.rssi > b.rssi;
-    });
+    if (g_evtAuthFail || g_evtNoApFound)
+      break; // early abort on known-fatal reasons
+    delay(50);
   }
 
-  WiFi.scanDelete();
-
-  if (modeChanged)
+  // Timeout or fatal reason — rollback to previous association if we had one.
+  Serial.printf("[WiFi] Provisional switch FAILED (%d): rolling back\n", (int)g_lastDiscReason);
+  if (g_prevValid)
   {
-    WiFi.mode(previousMode);
+    WiFi.begin(g_prevSsid.c_str(), g_prevPassword.c_str(), g_prevChannel, g_prevBssid, true);
+    uint32_t rbStart = millis();
+    while (millis() - rbStart < ROLLBACK_WAIT_MS)
+    {
+      if (WiFi.status() == WL_CONNECTED)
+      {
+        Serial.printf("[WiFi] Rollback SUCCESS: restored '%s'\n", WiFi.SSID().c_str());
+        return false; // switch failed; we restored
+      }
+      delay(50);
+    }
+    Serial.println("[WiFi] Rollback did not reconnect within 5s (stack will keep retrying).");
+  }
+  else
+  {
+    Serial.println("[WiFi] No prior association snapshot; cannot fast-rollback.");
+  }
+  return false;
+}
+
+// ---------- Connect attempt ----------
+static void beginStationConnection()
+{
+  // If AP is active (portal up), attempt in AP+STA so the portal stays reachable.
+  // Otherwise, attempt in pure STA (boot case with creds / STA reconnects).
+  wifi_mode_t targetMode = g_accessPointActive ? WIFI_AP_STA : WIFI_STA;
+  if (WiFi.getMode() != targetMode)
+  {
+    WiFi.mode(targetMode);
   }
 
-  return results;
+  Serial.printf("[WiFi] Connecting to SSID '%s' (%s)\n",
+                g_ssid.c_str(), g_accessPointActive ? "AP+STA" : "STA");
+
+  clearConnectEvents();
+  WiFi.begin(g_ssid.c_str(), g_password.c_str());
+  g_connectStart = millis();
+  g_state = State::Connecting;
+}
+
+// ---------- Event hook ----------
+static void onWiFiEvent(WiFiEvent_t event, WiFiEventInfo_t info)
+{
+  switch (event)
+  {
+  case ARDUINO_EVENT_WIFI_STA_DISCONNECTED:
+  {
+    g_lastDiscReason = info.wifi_sta_disconnected.reason;
+    // Mark terminal/fatal categories we want to short-circuit on
+    if (g_lastDiscReason == WIFI_REASON_AUTH_FAIL ||
+        g_lastDiscReason == WIFI_REASON_4WAY_HANDSHAKE_TIMEOUT ||
+        g_lastDiscReason == WIFI_REASON_NO_AP_FOUND)
+    {
+      if (g_lastDiscReason == WIFI_REASON_NO_AP_FOUND)
+        g_evtNoApFound = true;
+      else
+        g_evtAuthFail = true;
+    }
+    break;
+  }
+  default:
+    break;
+  }
+}
+
+// ---------- Public API ----------
+void wifiManagerInitialize()
+{
+  // Memory + policy
+  btStop(); // free Classic BT heap on ESP32
+  esp_coex_preference_set(ESP_COEX_PREFER_WIFI);
+  WiFi.persistent(false);
+  WiFi.setAutoReconnect(false);
+  WiFi.setAutoConnect(false);
+
+  // Event registration
+  WiFi.onEvent(onWiFiEvent);
+
+  // Load creds
+  g_prefs.begin("wifi", false);
+  g_ssid = g_prefs.getString("ssid", "");
+  g_password = g_prefs.getString("pass", "");
+  g_ssid.trim();
+  g_password.trim();
+  g_hasCredentials = (!g_ssid.isEmpty());
+
+  if (g_hasCredentials)
+  {
+    // Boot path with creds: try STA only; do NOT start AP yet.
+    Serial.println(F("[WiFi] Creds present: attempting STA-only"));
+    if (WiFi.getMode() != WIFI_STA)
+      WiFi.mode(WIFI_STA);
+    beginStationConnection(); // stays in STA because AP is not active
+  }
+  else
+  {
+    // No creds: AP-only captive portal
+    Serial.println(F("[WiFi] No creds: starting AP-only portal"));
+    startAccessPoint();
+    g_state = State::AccessPointOnly;
+  }
+}
+
+void wifiManagerLoop()
+{
+  // State machine tick
+  switch (g_state)
+  {
+  case State::AccessPointOnly:
+    handleAccessPointOnly();
+    break;
+  case State::Connecting:
+    handleConnecting();
+    break;
+  case State::Connected:
+    handleConnected();
+    break;
+  }
+  // Pump DNS if running
+  if (g_dnsServerRunning)
+    g_dns.processNextRequest();
+}
+
+bool wifiManagerHasCredentials() { return g_hasCredentials; }
+bool wifiManagerIsAccessPointActive() { return g_accessPointActive; }
+bool wifiManagerIsConnecting() { return g_state == State::Connecting; }
+bool wifiManagerIsConnected() { return g_state == State::Connected; }
+
+String wifiManagerConnectedSSID() { return (WiFi.status() == WL_CONNECTED) ? WiFi.SSID() : String(); }
+IPAddress wifiManagerLocalIp() { return (WiFi.status() == WL_CONNECTED) ? WiFi.localIP() : IPAddress(); }
+IPAddress wifiManagerApIp() { return g_accessPointActive ? WiFi.softAPIP() : IPAddress(); }
+
+void wifiManagerSetCredentials(const String &ssid, const String &password)
+{
+  String s = ssid;
+  String p = password;
+  s.trim();
+  p.trim();
+  const bool hasCreds = !s.isEmpty();
+
+  if (!hasCreds)
+  {
+    // Clearing creds through this path: drop to AP-only
+    wifiManagerForgetCredentials();
+    return;
+  }
+
+  // Case A: Portal flow (AP active) → attempt in AP+STA, commit on success
+  if (g_accessPointActive)
+  {
+    Serial.println(F("[WiFi] Creds submitted via portal: AP+STA attempt, commit on success"));
+    g_pendingSsid = s;
+    g_pendingPassword = p;
+    g_hasPending = true;
+
+    // Do NOT write to NVS yet; run a connecting attempt with AP up
+    if (WiFi.getMode() != WIFI_AP_STA)
+      WiFi.mode(WIFI_AP_STA);
+    clearConnectEvents();
+    WiFi.begin(s.c_str(), p.c_str());
+    g_connectStart = millis();
+    g_state = State::Connecting; // on success, we'll commit and stop AP
+    return;
+  }
+
+  // Case B: Already STA-connected → provisional switch with rollback; commit on success
+  if (WiFi.status() == WL_CONNECTED && WiFi.getMode() == WIFI_STA)
+  {
+    Serial.println(F("[WiFi] Provisional STA switch (no AP): commit only if success"));
+    const bool ok = attemptStaSwitchWithRollback(s, p, CONNECTION_TIMEOUT_MS);
+    if (ok)
+    {
+      // Now on new network → commit to NVS and update in-memory creds
+      g_prefs.putString("ssid", s);
+      g_prefs.putString("pass", p);
+      g_ssid = s;
+      g_password = p;
+      g_hasCredentials = true;
+      Serial.println(F("[WiFi] New credentials committed after successful association"));
+      g_state = State::Connected;
+      scheduleBackoff(false); // reset backoff
+    }
+    else
+    {
+      Serial.println(F("[WiFi] Switch failed; kept previous association and credentials"));
+      // state remains Connected (rollback attempted)
+    }
+    return;
+  }
+
+  // Case C: Neither AP nor connected STA (e.g., idle) → STA-first; AP on failure
+  Serial.println(F("[WiFi] Setting creds in idle state: STA attempt, AP on failure"));
+  g_prefs.putString("ssid", s);
+  g_prefs.putString("pass", p);
+  g_ssid = s;
+  g_password = p;
+  g_hasCredentials = true;
+  WiFi.disconnect(true);
+  if (WiFi.getMode() != WIFI_STA)
+    WiFi.mode(WIFI_STA);
+  beginStationConnection();
+}
+
+void wifiManagerForgetCredentials()
+{
+  g_prefs.remove("ssid");
+  g_prefs.remove("pass");
+  g_ssid = "";
+  g_password = "";
+  g_hasCredentials = false;
+
+  Serial.println(F("[WiFi] Credentials forgotten: going AP-only"));
+  WiFi.disconnect(true /*wifiOff*/);
+  startAccessPoint();
+  g_state = State::AccessPointOnly;
+  scheduleBackoff(false); // reset backoff
+}
+
+void wifiManagerEnsureAccessPoint()
+{
+  // Keep the portal up unless we're actively connected (then it’s explicitly off).
+  if (g_state != State::Connected && !g_accessPointActive)
+    startAccessPoint();
+}
+
+// ---------- State handlers ----------
+static void handleAccessPointOnly()
+{
+  // Ensure AP is alive in this state.
+  if (!g_accessPointActive)
+    startAccessPoint();
+
+  if (!g_hasCredentials)
+    return;
+
+  uint32_t now = millis();
+  if (g_nextReconnectAt == 0)
+  {
+    scheduleBackoff(false); // initialize backoff schedule
+  }
+  if (now >= g_nextReconnectAt)
+  {
+    // Attempt with AP+STA so portal remains reachable.
+    beginStationConnection();
+  }
+}
+
+static void handleConnecting()
+{
+  wl_status_t st = WiFi.status();
+
+  // Early aborts from event reasons (fatal categories)
+  if (g_evtAuthFail || g_evtNoApFound)
+  {
+    Serial.printf("[WiFi] Early abort due to event reason: %d\n", (int)g_lastDiscReason);
+    // Portal flow: keep/return to AP-only; discard pending
+    if (g_hasPending)
+    {
+      g_hasPending = false;
+      if (!g_accessPointActive)
+        startAccessPoint();
+      g_state = State::AccessPointOnly;
+      scheduleBackoff(true);
+      Serial.println(F("[WiFi] Pending credentials discarded (event abort); portal remains active"));
+    }
+    else
+    {
+      // Non-portal attempt: ensure AP available for recovery
+      if (!g_accessPointActive)
+        startAccessPoint();
+      g_state = State::AccessPointOnly;
+      scheduleBackoff(true);
+    }
+    return;
+  }
+
+  if (st == WL_CONNECTED)
+  {
+    Serial.printf("[WiFi] Connected: %s  IP=%s\n",
+                  WiFi.SSID().c_str(), WiFi.localIP().toString().c_str());
+    // If this came from portal (pending creds), commit now
+    if (g_hasPending)
+    {
+      g_prefs.putString("ssid", g_pendingSsid);
+      g_prefs.putString("pass", g_pendingPassword);
+      g_ssid = g_pendingSsid;
+      g_password = g_pendingPassword;
+      g_hasCredentials = true;
+      g_hasPending = false;
+      Serial.println(F("[WiFi] Pending credentials committed (portal flow)"));
+    }
+    // Success: drop portal (if any) and go STA-only
+    if (g_accessPointActive)
+      stopAccessPoint();
+    if (WiFi.getMode() != WIFI_STA)
+      WiFi.mode(WIFI_STA);
+    g_state = State::Connected;
+    scheduleBackoff(false); // reset backoff on success
+    return;
+  }
+
+  uint32_t elapsed = millis() - g_connectStart;
+  if (elapsed > CONNECTION_TIMEOUT_MS)
+  {
+    Serial.println(F("[WiFi] Connection timed out"));
+    if (g_hasPending)
+    {
+      // Portal flow timeout → keep/return to AP-only; discard pending
+      g_hasPending = false;
+      if (!g_accessPointActive)
+        startAccessPoint();
+      g_state = State::AccessPointOnly;
+      scheduleBackoff(true);
+      Serial.println(F("[WiFi] Pending credentials discarded (timeout); portal remains active"));
+    }
+    else
+    {
+      // Non-portal attempt timeout: ensure AP is available for recovery
+      if (!g_accessPointActive)
+        startAccessPoint();
+      g_state = State::AccessPointOnly;
+      scheduleBackoff(true);
+    }
+  }
+}
+
+static void handleConnected()
+{
+  if (WiFi.status() == WL_CONNECTED)
+  {
+    // If portal is somehow still up, ensure we’re pure STA.
+    if (g_accessPointActive)
+      stopAccessPoint();
+    if (WiFi.getMode() != WIFI_STA)
+      WiFi.mode(WIFI_STA);
+    return;
+  }
+
+  // Link lost while in Connected state: keep STA-only; try soft reconnect first.
+  Serial.println(F("[WiFi] Station connection lost"));
+  if (!WiFi.reconnect())
+  {
+    WiFi.disconnect(true /*wifiOff*/);
+    if (WiFi.getMode() != WIFI_STA)
+      WiFi.mode(WIFI_STA);
+    // Re-attempt using stored creds (STA-only)
+    if (g_hasCredentials)
+    {
+      beginStationConnection();
+    }
+    else
+    {
+      // No creds left? fall back to AP-only
+      startAccessPoint();
+      g_state = State::AccessPointOnly;
+      scheduleBackoff(false);
+    }
+  }
+}
+
+// ---------- Scan ----------
+std::vector<ScanResult> wifiManagerScanNetworks()
+{
+  // Save current mode
+  wifi_mode_t prior = WiFi.getMode();
+
+  // Ensure scanning works regardless of AP-only; use AP+STA if portal is running.
+  if (g_accessPointActive)
+  {
+    if (prior != WIFI_AP_STA)
+      WiFi.mode(WIFI_AP_STA);
+  }
+  else
+  {
+    if (prior != WIFI_STA)
+      WiFi.mode(WIFI_STA);
+  }
+
+  int n = WiFi.scanNetworks(/*async=*/false, /*hidden=*/true);
+  std::vector<ScanResult> out;
+  out.reserve((n > 0) ? n : 0);
+
+  for (int i = 0; i < n; ++i)
+  {
+    ScanResult r;
+    r.ssid = WiFi.SSID(i);
+    r.rssi = WiFi.RSSI(i);
+    r.authmode = WiFi.encryptionType(i);
+    r.bssid = nullptr; // skip copying for now
+    r.channel = WiFi.channel(i);
+    r.hidden = WiFi.isHidden(i);
+    out.push_back(std::move(r));
+  }
+
+  // Restore prior mode (and thus AP/portal state)
+  if (WiFi.getMode() != prior)
+    WiFi.mode(prior);
+  WiFi.scanDelete();
+  return out;
 }

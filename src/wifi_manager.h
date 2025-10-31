@@ -1,35 +1,37 @@
 #pragma once
 
 #include <Arduino.h>
-#include <IPAddress.h>
+#include <WiFi.h>
 #include <vector>
 
-struct WifiManagerStatus
-{
-  bool hasCredentials;
-  bool connected;
-  bool connecting;
-  bool accessPointActive;
-  String connectedSsid;
-  IPAddress stationIp;
-  IPAddress accessPointIp;
-};
+// Public API
+void wifiManagerInitialize();
+void wifiManagerLoop();
 
-struct WifiScanResult
+bool wifiManagerHasCredentials();
+bool wifiManagerIsConnected();
+bool wifiManagerIsConnecting();
+bool wifiManagerIsAccessPointActive();
+
+String wifiManagerConnectedSSID();
+IPAddress wifiManagerLocalIp();
+IPAddress wifiManagerApIp();
+
+void wifiManagerSetCredentials(const String &ssid, const String &password);
+void wifiManagerForgetCredentials();
+
+// Keep AP running unless actively connected in STA.
+// Force AP up (no-op if already on).
+void wifiManagerEnsureAccessPoint();
+
+// Scan utilities (blocking, short)
+struct ScanResult
 {
   String ssid;
   int32_t rssi;
-  bool secure;
+  wifi_auth_mode_t authmode;
+  uint8_t *bssid; // optional (can be nullptr)
+  int32_t channel;
   bool hidden;
 };
-
-void wifiManagerInitialize();
-void wifiManagerLoop();
-WifiManagerStatus wifiManagerGetStatus();
-bool wifiManagerIsConnecting();
-const char *wifiManagerAccessPointSsid();
-const char *wifiManagerAccessPointPassword();
-bool wifiManagerSetCredentials(const String &ssid, const String &password);
-bool wifiManagerForgetCredentials();
-void wifiManagerEnsureAccessPoint();
-std::vector<WifiScanResult> wifiManagerScanNetworks();
+std::vector<ScanResult> wifiManagerScanNetworks();
