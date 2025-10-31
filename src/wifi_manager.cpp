@@ -266,7 +266,7 @@ static void onWiFiEvent(WiFiEvent_t event, WiFiEventInfo_t info)
   {
   case ARDUINO_EVENT_WIFI_STA_DISCONNECTED:
   {
-    g_lastDiscReason = info.wifi_sta_disconnected.reason;
+    g_lastDiscReason = static_cast<wifi_err_reason_t>(info.wifi_sta_disconnected.reason);
     // Mark terminal/fatal categories we want to short-circuit on
     if (g_lastDiscReason == WIFI_REASON_AUTH_FAIL ||
         g_lastDiscReason == WIFI_REASON_4WAY_HANDSHAKE_TIMEOUT ||
@@ -605,11 +605,11 @@ std::vector<ScanResult> wifiManagerScanNetworks()
   {
     ScanResult r;
     r.ssid = WiFi.SSID(i);
+    r.hidden = r.ssid.length() == 0;
     r.rssi = WiFi.RSSI(i);
     r.authmode = WiFi.encryptionType(i);
     r.bssid = nullptr; // skip copying for now
     r.channel = WiFi.channel(i);
-    r.hidden = WiFi.isHidden(i);
     out.push_back(std::move(r));
   }
 
