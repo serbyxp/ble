@@ -143,22 +143,25 @@ static void startAccessPoint()
     WiFi.mode(targetMode);
   }
 
-  if (!g_accessPointActive)
+  if (g_accessPointActive)
+    return;
+
+  if (!WiFi.softAP(AP_SSID, AP_PASSWORD))
   {
-    if (!WiFi.softAPConfig(AP_IP, AP_GW, AP_NETMASK))
-    {
-      Serial.println(F("[WiFi] Failed to configure AP interface"));
-      return;
-    }
-    if (!WiFi.softAP(AP_SSID, AP_PASSWORD))
-    {
-      Serial.println(F("[WiFi] Failed to start access point"));
-      return;
-    }
-    g_accessPointActive = true;
-    startDnsServer();
-    Serial.printf("[WiFi] AP started (pure AP) with captive DNS (password: %s)\n", AP_PASSWORD);
+    Serial.println(F("[WiFi] Failed to start access point"));
+    return;
   }
+
+  if (!WiFi.softAPConfig(AP_IP, AP_GW, AP_NETMASK))
+  {
+    Serial.println(F("[WiFi] Failed to configure AP interface"));
+    WiFi.softAPdisconnect(true);
+    return;
+  }
+
+  g_accessPointActive = true;
+  startDnsServer();
+  Serial.printf("[WiFi] AP started (pure AP) with captive DNS (password: %s)\n", AP_PASSWORD);
 }
 
 static void stopAccessPoint()
