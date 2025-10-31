@@ -312,6 +312,14 @@ namespace
       return;
     }
 
+    String ssid(ssidValue);
+    ssid.trim();
+    if (ssid.isEmpty())
+    {
+      sendErrorResponse(400, "ssid must not be empty");
+      return;
+    }
+
     String password;
     if (!doc["password"].isNull())
     {
@@ -327,9 +335,9 @@ namespace
       }
     }
 
-    if (!wifiManagerSetCredentials(String(ssidValue), password))
+    if (!wifiManagerSetCredentials(ssid, password))
     {
-      sendErrorResponse(400, "ssid must not be empty");
+      sendErrorResponse(500, "Failed to update WiFi credentials");
       return;
     }
 

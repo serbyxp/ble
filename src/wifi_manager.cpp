@@ -345,25 +345,44 @@ void wifiManagerLoop()
 bool wifiManagerHasCredentials() { return g_hasCredentials; }
 bool wifiManagerIsAccessPointActive() { return g_accessPointActive; }
 bool wifiManagerIsConnecting() { return g_state == State::Connecting; }
-bool wifiManagerIsConnected() { return g_state == State::Connected; }
+bool wifiManagerIsConnected() { return WiFi.status() == WL_CONNECTED; }
 
 String wifiManagerConnectedSSID() { return (WiFi.status() == WL_CONNECTED) ? WiFi.SSID() : String(); }
 IPAddress wifiManagerLocalIp() { return (WiFi.status() == WL_CONNECTED) ? WiFi.localIP() : IPAddress(); }
 IPAddress wifiManagerApIp() { return g_accessPointActive ? WiFi.softAPIP() : IPAddress(); }
 
-void wifiManagerSetCredentials(const String &ssid, const String &password)
+WifiManagerStatus wifiManagerGetStatus()
+{
+  WifiManagerStatus status;
+  status.hasCredentials = g_hasCredentials;
+  status.connecting = g_state == State::Connecting;
+  status.connected = WiFi.status() == WL_CONNECTED;
+  status.accessPointActive = g_accessPointActive;
+  status.connectedSsid = wifiManagerConnectedSSID();
+  status.stationIp = wifiManagerLocalIp();
+  if (status.accessPointActive)
+  {
+    status.accessPointIp = WiFi.softAPIP();
+  }
+  return status;
+}
+
+const char *wifiManagerAccessPointSsid()
+{
+  return AP_SSID;
+}
+
+bool wifiManagerSetCredentials(const String &ssid, const String &password)
 {
   String s = ssid;
   String p = password;
   s.trim();
   p.trim();
-  const bool hasCreds = !s.isEmpty();
 
-  if (!hasCreds)
+  if (s.isEmpty())
   {
-    // Clearing creds through this path: drop to AP-only
-    wifiManagerForgetCredentials();
-    return;
+    Serial.println(F("[WiFi] Rejecting credentials update: SSID is empty"));
+    return false;
   }
 
   // Case A: Portal flow (AP active) → attempt in AP+STA, commit on success
@@ -381,19 +400,23 @@ void wifiManagerSetCredentials(const String &ssid, const String &password)
     WiFi.begin(s.c_str(), p.c_str());
     g_connectStart = millis();
     g_state = State::Connecting; // on success, we'll commit and stop AP
-    return;
+    return true;
   }
 
   // Case B: Already STA-connected → provisional switch with rollback; commit on success
   if (WiFi.status() == WL_CONNECTED && WiFi.getMode() == WIFI_STA)
   {
     Serial.println(F("[WiFi] Provisional STA switch (no AP): commit only if success"));
-    const bool ok = attemptStaSwitchWithRollback(s, p, CONNECTION_TIMEOUT_MS);
-    if (ok)
+    const bool switched = attemptStaSwitchWithRollback(s, p, CONNECTION_TIMEOUT_MS);
+    if (switched)
     {
-      // Now on new network → commit to NVS and update in-memory creds
-      g_prefs.putString("ssid", s);
-      g_prefs.putString("pass", p);
+      const size_t storedSsid = g_prefs.putString("ssid", s);
+      const size_t storedPass = g_prefs.putString("pass", p);
+      if (storedSsid == 0 || storedPass == 0)
+      {
+        Serial.println(F("[WiFi] Failed to persist credentials after switch"));
+        return false;
+      }
       g_ssid = s;
       g_password = p;
       g_hasCredentials = true;
@@ -404,15 +427,20 @@ void wifiManagerSetCredentials(const String &ssid, const String &password)
     else
     {
       Serial.println(F("[WiFi] Switch failed; kept previous association and credentials"));
-      // state remains Connected (rollback attempted)
+      // keep current state; caller will observe connection status separately
     }
-    return;
+    return true;
   }
 
   // Case C: Neither AP nor connected STA (e.g., idle) → STA-first; AP on failure
   Serial.println(F("[WiFi] Setting creds in idle state: STA attempt, AP on failure"));
-  g_prefs.putString("ssid", s);
-  g_prefs.putString("pass", p);
+  const size_t storedSsid = g_prefs.putString("ssid", s);
+  const size_t storedPass = g_prefs.putString("pass", p);
+  if (storedSsid == 0 || storedPass == 0)
+  {
+    Serial.println(F("[WiFi] Failed to persist credentials in idle state"));
+    return false;
+  }
   g_ssid = s;
   g_password = p;
   g_hasCredentials = true;
@@ -420,12 +448,20 @@ void wifiManagerSetCredentials(const String &ssid, const String &password)
   if (WiFi.getMode() != WIFI_STA)
     WiFi.mode(WIFI_STA);
   beginStationConnection();
+  return true;
 }
 
-void wifiManagerForgetCredentials()
+bool wifiManagerForgetCredentials()
 {
-  g_prefs.remove("ssid");
-  g_prefs.remove("pass");
+  bool ok = true;
+  if (g_prefs.isKey("ssid") && !g_prefs.remove("ssid"))
+    ok = false;
+  if (g_prefs.isKey("pass") && !g_prefs.remove("pass"))
+    ok = false;
+
+  g_pendingSsid = "";
+  g_pendingPassword = "";
+  g_hasPending = false;
   g_ssid = "";
   g_password = "";
   g_hasCredentials = false;
@@ -435,6 +471,7 @@ void wifiManagerForgetCredentials()
   startAccessPoint();
   g_state = State::AccessPointOnly;
   scheduleBackoff(false); // reset backoff
+  return ok;
 }
 
 void wifiManagerEnsureAccessPoint()
@@ -580,7 +617,7 @@ static void handleConnected()
 }
 
 // ---------- Scan ----------
-std::vector<ScanResult> wifiManagerScanNetworks()
+std::vector<WifiScanResult> wifiManagerScanNetworks()
 {
   // Save current mode
   wifi_mode_t prior = WiFi.getMode();
@@ -598,18 +635,16 @@ std::vector<ScanResult> wifiManagerScanNetworks()
   }
 
   int n = WiFi.scanNetworks(/*async=*/false, /*hidden=*/true);
-  std::vector<ScanResult> out;
+  std::vector<WifiScanResult> out;
   out.reserve((n > 0) ? n : 0);
 
   for (int i = 0; i < n; ++i)
   {
-    ScanResult r;
+    WifiScanResult r;
     r.ssid = WiFi.SSID(i);
     r.hidden = r.ssid.length() == 0;
     r.rssi = WiFi.RSSI(i);
-    r.authmode = WiFi.encryptionType(i);
-    r.bssid = nullptr; // skip copying for now
-    r.channel = WiFi.channel(i);
+    r.secure = WiFi.encryptionType(i) != WIFI_AUTH_OPEN;
     out.push_back(std::move(r));
   }
 
