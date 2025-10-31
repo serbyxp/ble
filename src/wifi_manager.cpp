@@ -95,8 +95,11 @@ namespace
       return;
     }
 
-    WiFi.disconnect(true);
-    WiFi.mode(WIFI_AP);
+    wifi_mode_t targetMode = g_hasCredentials ? WIFI_AP_STA : WIFI_AP;
+    if (WiFi.getMode() != targetMode)
+    {
+      WiFi.mode(targetMode);
+    }
     IPAddress apIp(192, 168, 4, 1);
     WiFi.softAPConfig(apIp, apIp, IPAddress(255, 255, 255, 0));
     if (WiFi.softAP(ACCESS_POINT_SSID, ACCESS_POINT_PASSWORD))
@@ -143,14 +146,17 @@ namespace
       return;
     }
 
-    if (g_accessPointActive)
+    wifi_mode_t targetMode = g_accessPointActive ? WIFI_AP_STA : WIFI_STA;
+    if (WiFi.getMode() != targetMode)
     {
-      stopAccessPoint();
+      WiFi.mode(targetMode);
     }
 
-    WiFi.mode(WIFI_STA);
-
     Serial.printf("[WiFi] Connecting to '%s'\n", g_savedSsid.c_str());
+    if (g_accessPointActive)
+    {
+      Serial.println(F("[WiFi] Access point remains active during station connection attempt"));
+    }
     beginSavedStation();
     uint32_t now = millis();
     g_connectStart = now;
@@ -164,12 +170,22 @@ namespace
     {
       Serial.println(F("[WiFi] Station connection lost"));
       WiFi.disconnect();
+      if (g_accessPointActive)
+      {
+        Serial.println(F("[WiFi] Access point already active during reconnection attempt"));
+      }
+      else if (g_hasCredentials)
+      {
+        Serial.println(F("[WiFi] Restarting access point for reconnection attempt"));
+        startAccessPoint();
+      }
       beginStationConnection();
       return;
     }
 
     if (g_accessPointActive)
     {
+      Serial.println(F("[WiFi] Station connected; shutting down access point"));
       stopAccessPoint();
     }
 
@@ -195,8 +211,15 @@ namespace
     {
       Serial.println(F("[WiFi] Connection timed out, keeping access point active"));
       WiFi.disconnect(true);
-      g_accessPointActive = false;
-      startAccessPoint();
+      if (!g_accessPointActive)
+      {
+        Serial.println(F("[WiFi] Warning: access point unexpectedly inactive during retry"));
+        startAccessPoint();
+      }
+      else
+      {
+        Serial.println(F("[WiFi] Access point still active; will retry station connection"));
+      }
       g_state = WifiState::AccessPointOnly;
       g_lastReconnectAttempt = now;
     }
@@ -209,6 +232,7 @@ namespace
       if (g_hasCredentials)
       {
         Serial.println(F("[WiFi] Access point offline, retrying station connection"));
+        startAccessPoint();
         beginStationConnection();
       }
       else
@@ -221,6 +245,11 @@ namespace
     if (!g_hasCredentials)
     {
       return;
+    }
+
+    if (!g_accessPointActive)
+    {
+      Serial.println(F("[WiFi] Warning: expected access point to remain active during retries"));
     }
 
     uint32_t now = millis();
