@@ -17,6 +17,7 @@ static const IPAddress AP_IP(192, 168, 4, 1);
 static const IPAddress AP_NETMASK(255, 255, 255, 0);
 static const IPAddress AP_GW(192, 168, 4, 1);
 static const char *AP_SSID = "ble-hid";
+static const char *AP_PASSWORD = "blehidsetup";
 
 // ---------- State ----------
 enum class State
@@ -144,11 +145,19 @@ static void startAccessPoint()
 
   if (!g_accessPointActive)
   {
-    WiFi.softAPConfig(AP_IP, AP_GW, AP_NETMASK);
-    WiFi.softAP(AP_SSID);
+    if (!WiFi.softAPConfig(AP_IP, AP_GW, AP_NETMASK))
+    {
+      Serial.println(F("[WiFi] Failed to configure AP interface"));
+      return;
+    }
+    if (!WiFi.softAP(AP_SSID, AP_PASSWORD))
+    {
+      Serial.println(F("[WiFi] Failed to start access point"));
+      return;
+    }
     g_accessPointActive = true;
     startDnsServer();
-    Serial.println(F("[WiFi] AP started (pure AP) with captive DNS"));
+    Serial.printf("[WiFi] AP started (pure AP) with captive DNS (password: %s)\n", AP_PASSWORD);
   }
 }
 
@@ -370,6 +379,11 @@ WifiManagerStatus wifiManagerGetStatus()
 const char *wifiManagerAccessPointSsid()
 {
   return AP_SSID;
+}
+
+const char *wifiManagerAccessPointPassword()
+{
+  return AP_PASSWORD;
 }
 
 bool wifiManagerSetCredentials(const String &ssid, const String &password)

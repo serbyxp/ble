@@ -236,6 +236,7 @@ namespace
     }
     doc["accessPointActive"] = status.accessPointActive;
     doc["accessPointSsid"] = wifiManagerAccessPointSsid();
+    doc["accessPointPassword"] = wifiManagerAccessPointPassword();
     if (status.accessPointActive)
     {
       doc["accessPointIp"] = status.accessPointIp.toString();

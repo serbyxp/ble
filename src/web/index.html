@@ -355,7 +355,11 @@
         if (data.accessPointActive) {
           const apIp = data.accessPointIp || "192.168.4.1";
           const apSsid = data.accessPointSsid || "device";
-          parts.push(`Device access point \"${apSsid}\" available at ${apIp}.`);
+          const apPassword = typeof data.accessPointPassword === "string" ? data.accessPointPassword : "";
+          const apDetails = apPassword
+            ? `Device access point \"${apSsid}\" available at ${apIp} (password: ${apPassword}).`
+            : `Device access point \"${apSsid}\" available at ${apIp}.`;
+          parts.push(apDetails);
         } else {
           parts.push("Device access point is disabled.");
         }
