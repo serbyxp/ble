@@ -30,6 +30,7 @@ struct WifiManagerStatus
 
 WifiManagerStatus wifiManagerGetStatus();
 const char *wifiManagerAccessPointSsid();
+const char *wifiManagerAccessPointPassword();
 
 bool wifiManagerSetCredentials(const String &ssid, const String &password);
 bool wifiManagerForgetCredentials();
